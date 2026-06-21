@@ -1,0 +1,33 @@
+---
+description: True Wealth product context; agent handles setup and ops; user only for real blockers; prioritize low-effort UX
+alwaysApply: true
+---
+
+# True Wealth: project and agent behavior
+
+## What this repo is
+
+**True Wealth** is a single-user, **read-only** portfolio dashboard for an Indian investor. **FastAPI** (`backend/`) uses **INDmoney MCP** (JSON-RPC) when a URL and Bearer/OAuth are set; otherwise the book is **empty** (no hidden sample data in the live path). **Next.js** (`frontend/`) is the app; root `npm run dev` / `npm run build` delegate to `frontend/`. **SQLite** + **Alembic** (`backend/alembic/`). **No trades**, decision support only.
+
+## You take care of almost everything
+
+- **You** install, migrate, test, build, and start/stop dev servers. Do not hand the user a checklist of commands unless they explicitly want instructions only.
+- **Restarting dev**: stop the existing **uvicorn** and **Next** processes first (Ctrl+C or end the background job), then start again so ports are free and `.next` / hot reload does not get confused.
+- Fix missing venv, `node_modules`, migrations, and broken CI yourself when changes are safe and reversible; say what you did in plain language.
+- Prefer running `alembic upgrade head`, `pytest`, and `npm run build` after meaningful backend or frontend edits.
+
+## When you may ask the user (keep it rare)
+
+- **Secrets and identity**: OTP, MPIN, broker passwords, or tokens only they can obtain. Never ask them to “run curl” to fix routine issues.
+- **True blockers**: missing permissions, network or policy limits, ambiguous product decisions, or destructive actions (data loss, force push) where policy requires explicit consent.
+- **Errors**: if something fails, **try to fix it yourself** first (logs, deps, ports, config). Only loop the user in with a **short** question when you are stuck or need a secret or a product choice.
+
+## Make the app easy: low effort for the user
+
+- Prefer **defaults**, **one obvious path**, and **clear labels** over power-user jargon. Reduce steps to “see my book” and “connect MCP”.
+- Dashboard copy and flows should assume a tired user: minimal reading, strong status (live vs empty/degraded, last sync), actionable next step when something is wrong.
+- When changing UI, bias toward **less thinking**, not more features.
+
+## Scope
+
+- Stay aligned with this product (portfolio, MCP, SSE, rules, trust copy). Do not sprawl into unrelated stacks unless the user asked.

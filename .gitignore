@@ -203,6 +203,16 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# TrueWealth local
+backend/.venv/
+backend/data/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# macOS
+.DS_Store
+
 # Ruff stuff:
 .ruff_cache/
 

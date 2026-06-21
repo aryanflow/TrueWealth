@@ -1,0 +1,52 @@
+[
+  {
+    "name": "HDFC Bank Ltd",
+    "symbol": "HDFCBANK",
+    "isin": "INE040A01034",
+    "asset_type": "IN_STOCK",
+    "country": "IN",
+    "currency": "INR",
+    "quantity": 50,
+    "avg_cost": 1450.0,
+    "last_price": 1520.25,
+    "day_change": 125.5
+  },
+  {
+    "name": "Apple Inc",
+    "symbol": "AAPL",
+    "isin": null,
+    "asset_type": "US_STOCK",
+    "country": "US",
+    "currency": "USD",
+    "quantity": 3,
+    "avg_cost": 180.0,
+    "day_change": -2.1
+  },
+  {
+    "name": "Nifty 50 ETF",
+    "symbol": "NIFTYBEES",
+    "quantity": 200,
+    "avg_cost": 245.0,
+    "last_price": 251.4,
+    "day_change": 320.0,
+    "instrument_type": "ETF"
+  },
+  {
+    "name": "Parag Parikh Flexi Cap Fund",
+    "symbol": "PPFAS",
+    "quantity": 1240.532,
+    "avg_cost": 52.1,
+    "nav": 58.2,
+    "day_change": 210.4,
+    "category": "mutual_fund"
+  },
+  {
+    "name": "Liquid Cash",
+    "symbol": "CASH",
+    "quantity": 1,
+    "avg_cost": null,
+    "last_price": 125000.0,
+    "market_value": 125000.0,
+    "instrument_type": "cash"
+  }
+]

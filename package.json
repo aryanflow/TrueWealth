@@ -1,0 +1,11 @@
+{
+  "name": "truewealth",
+  "private": true,
+  "description": "Monorepo-style scripts; app lives in frontend/",
+  "scripts": {
+    "build": "npm run build --prefix frontend",
+    "dev": "npm run dev --prefix frontend",
+    "start": "npm run start --prefix frontend",
+    "lint": "npm run lint --prefix frontend"
+  }
+}

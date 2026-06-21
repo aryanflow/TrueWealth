@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-canvas text-ink antialiased;
+  min-height: 100vh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.depth-field {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side at 18% 22%, rgba(110, 168, 255, 0.18), transparent 60%),
+    radial-gradient(closest-side at 74% 26%, rgba(104, 215, 198, 0.14), transparent 60%),
+    radial-gradient(closest-side at 58% 74%, rgba(255, 204, 102, 0.1), transparent 65%),
+    radial-gradient(closest-side at 24% 72%, rgba(255, 125, 154, 0.08), transparent 65%);
+  filter: blur(34px) saturate(115%);
+  opacity: 0.88;
+}
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+}
+
+.glass-soft {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+}
