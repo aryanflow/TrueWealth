@@ -13,11 +13,26 @@ const FILTERS: { id: string; label: string }[] = [
   { id: "US_STOCK", label: "US" },
   { id: "ETF", label: "ETF" },
   { id: "MF", label: "MF" },
+  { id: "EPF", label: "EPF" },
+  { id: "FD", label: "FD" },
+  { id: "CRYPTO", label: "Crypto" },
   { id: "CASH", label: "Cash" },
   { id: "OTHER", label: "Other" },
 ];
 
-export function HoldingsTable({ holdings }: { holdings: NormalizedHolding[] }) {
+function bookInr(h: NormalizedHolding): number {
+  const v = h.inr_market_value;
+  if (v != null && v > 0) return v;
+  return h.market_value;
+}
+
+export function HoldingsTable({
+  holdings,
+  highlightHoldingId,
+}: {
+  holdings: NormalizedHolding[];
+  highlightHoldingId?: string | null;
+}) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortKey>("weight");
   const [chip, setChip] = useState("ALL");
@@ -42,8 +57,8 @@ export function HoldingsTable({ holdings }: { holdings: NormalizedHolding[] }) {
   }, [holdings, q, sort, chip]);
 
   const summary = useMemo(() => {
-    const mv = filtered.reduce((s, h) => s + h.market_value, 0);
-    const dc = filtered.reduce((s, h) => s + (h.day_change_value ?? 0), 0);
+    const mv = filtered.reduce((s, h) => s + bookInr(h), 0);
+    const dc = filtered.reduce((s, h) => s + (h.inr_day_change_value ?? h.day_change_value ?? 0), 0);
     return { mv, dc };
   }, [filtered]);
 
@@ -124,13 +139,14 @@ export function HoldingsTable({ holdings }: { holdings: NormalizedHolding[] }) {
               </th>
               <th className="border-b border-line px-4 py-3 text-right font-mono numeric">Qty</th>
               <th className="border-b border-line px-4 py-3 text-right font-mono numeric">Last</th>
+              <th className="border-b border-line px-4 py-3 text-right font-mono numeric">INR book</th>
               <th className="border-b border-line px-4 py-3 text-right">
                 <button
                   type="button"
                   onClick={() => setSort("market_value")}
                   className={`w-full text-right hover:text-ink ${sort === "market_value" ? "text-ion" : ""}`}
                 >
-                  Value {sort === "market_value" ? "●" : ""}
+                  Native {sort === "market_value" ? "●" : ""}
                 </button>
               </th>
             </tr>
@@ -138,13 +154,19 @@ export function HoldingsTable({ holdings }: { holdings: NormalizedHolding[] }) {
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-muted">
+                <td colSpan={8} className="px-4 py-10 text-center text-muted">
                   No rows match. Clear filters or widen your search.
                 </td>
               </tr>
             ) : (
               filtered.map((h) => (
-                <tr key={h.id} className="border-b border-line/80 transition hover:bg-canvas/40">
+                <tr
+                  key={h.id}
+                  id={`holding-row-${h.id}`}
+                  className={`border-b border-line/80 transition hover:bg-canvas/40 ${
+                    highlightHoldingId === h.id ? "bg-ion/15 ring-1 ring-ion/40" : ""
+                  }`}
+                >
                   <td className="px-4 py-2">
                     <div className="font-medium text-ink">{h.name}</div>
                     <div className="font-mono text-xs text-muted">{h.symbol ?? "-"}</div>
@@ -156,6 +178,7 @@ export function HoldingsTable({ holdings }: { holdings: NormalizedHolding[] }) {
                   <td className="px-4 py-2 text-right font-mono numeric text-muted">
                     {h.last_price == null ? "-" : formatValue(h.last_price, h.currency)}
                   </td>
+                  <td className="px-4 py-2 text-right font-mono numeric text-mintglass/95">{formatInr(bookInr(h))}</td>
                   <td className="px-4 py-2 text-right font-mono numeric text-ink">
                     {formatValue(h.market_value, h.currency)}
                   </td>

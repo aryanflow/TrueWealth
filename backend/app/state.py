@@ -5,17 +5,23 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import INDMONEY_MCP_PUBLIC_URL, settings
 from app.mcp.adapter import IndmoneyAdapter
 from app.mcp.client import IndmoneyMcpClient
-from app.schemas import NormalizedHolding, PortfolioMeta, PortfolioResponse
+from app.models import Transaction
+from app.schemas import PortfolioMeta, PortfolioResponse
 from app.services.broadcast import BroadcastHub
+from app.services.day_move_proxy import enrich_day_change_from_ohlc
+from app.services.holding_quality import finalize_holdings_pipeline, prepare_holdings_from_priced_rows
+from app.services.mf_lab import build_mf_lab_summaries
 from app.services.normalizer import extract_transactions, normalize_payload
 from app.services import indmoney_oauth_service as imo
 from app.services.portfolio_service import (
-    compute_portfolio,
+    append_portfolio_snapshot_inr,
+    assemble_portfolio_response,
     load_rules,
     log_refresh,
     persist_holdings,
@@ -170,7 +176,11 @@ class AppState:
             log.info("refresh_holdings: normalized holdings count=%s mode=%s", len(normalized), self.mode)
             rows = [h.model_dump(mode="json") for h in normalized]
             priced = apply_prices_to_holdings(rows)
-            holdings = [NormalizedHolding.model_validate(x) for x in priced]
+            holdings = prepare_holdings_from_priced_rows(
+                priced,
+                usd_inr=settings.usdinr_rate,
+                fx_as_of=now,
+            )
 
             if self.adapter._tx_tool and self.mcp_connected:
                 try:
@@ -198,7 +208,34 @@ class AppState:
             self.last_holdings_sync = now
             rule = await load_rules(session)
             meta = self.meta()
-            self.cached = compute_portfolio(holdings, rule=rule, meta=meta)
+            tx_count = int((await session.execute(select(func.count()).select_from(Transaction))).scalar_one() or 0)
+            mf_lab: list[Any] = []
+            if self.mcp_connected:
+                try:
+                    mf_lab = await build_mf_lab_summaries(session, self.adapter, holdings)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("mf_lab refresh failed: %s", e)
+            self.cached = await assemble_portfolio_response(
+                session,
+                all_holdings=holdings,
+                meta_in=meta,
+                rule=rule,
+                txs_count=tx_count,
+                mf_lab_full=mf_lab,
+                usd_inr=settings.usdinr_rate,
+            )
+            try:
+                ft = self.cached.meta.full_book_totals
+                av = self.cached.meta.active_view
+                await append_portfolio_snapshot_inr(
+                    session,
+                    full_inr=float(ft.market_value) if ft else self.cached.totals.market_value,
+                    active_inr=float(self.cached.totals.market_value),
+                    active_view_id=av.id if av else None,
+                    now=now,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("snapshot append failed: %s", e)
             return self.cached
 
     async def refresh_prices(self, session: AsyncSession) -> PortfolioResponse:
@@ -212,8 +249,26 @@ class AppState:
                 d["currency"] = h.currency.value
                 plain.append(d)
             priced = apply_prices_to_holdings(plain)
-            holdings = [NormalizedHolding.model_validate(x) for x in priced]
             now = datetime.now(timezone.utc)
+            holdings = prepare_holdings_from_priced_rows(
+                priced,
+                usd_inr=settings.usdinr_rate,
+                fx_as_of=now,
+            )
+            if self.mcp_connected and settings.ohlc_enrich_max > 0:
+                try:
+                    holdings = await enrich_day_change_from_ohlc(
+                        self.adapter,
+                        holdings,
+                        max_calls=settings.ohlc_enrich_max,
+                    )
+                    holdings = finalize_holdings_pipeline(
+                        holdings,
+                        usd_inr=settings.usdinr_rate,
+                        fx_as_of=now,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.debug("ohlc enrich skipped: %s", e)
             log.info("refresh_prices: rows=%s", len(holdings))
             for h in holdings:
                 h.updated_at = now
@@ -221,7 +276,42 @@ class AppState:
             self.last_price_sync = now
             rule = await load_rules(session)
             meta = self.meta()
-            self.cached = compute_portfolio(holdings, rule=rule, meta=meta)
+            tx_count = int((await session.execute(select(func.count()).select_from(Transaction))).scalar_one() or 0)
+            prev_mf = list(self.cached.mf_lab) if self.cached else []
+            self.cached = await assemble_portfolio_response(
+                session,
+                all_holdings=holdings,
+                meta_in=meta,
+                rule=rule,
+                txs_count=tx_count,
+                mf_lab_full=prev_mf,
+                usd_inr=settings.usdinr_rate,
+            )
+            return self.cached
+
+    async def rebuild_portfolio_cache(self, session: AsyncSession) -> PortfolioResponse:
+        """Recompute portfolio for current DB holdings and active view (no MCP fetch)."""
+        async with self._lock:
+            now = datetime.now(timezone.utc)
+            holdings = await read_holdings_from_db(session)
+            holdings = finalize_holdings_pipeline(
+                holdings,
+                usd_inr=settings.usdinr_rate,
+                fx_as_of=now,
+            )
+            rule = await load_rules(session)
+            meta = self.meta()
+            tx_count = int((await session.execute(select(func.count()).select_from(Transaction))).scalar_one() or 0)
+            prev_mf = list(self.cached.mf_lab) if self.cached else []
+            self.cached = await assemble_portfolio_response(
+                session,
+                all_holdings=holdings,
+                meta_in=meta,
+                rule=rule,
+                txs_count=tx_count,
+                mf_lab_full=prev_mf,
+                usd_inr=settings.usdinr_rate,
+            )
             return self.cached
 
 

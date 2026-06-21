@@ -1,21 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
-import { AllocationCharts } from "@/components/AllocationCharts";
-import { AlertsPanel } from "@/components/AlertsPanel";
+import { ActionPlanPanel } from "@/components/ActionPlanPanel";
+import { DataDrawer } from "@/components/DataDrawer";
+import { DecisionCharts } from "@/components/DecisionCharts";
 import { Disclaimer } from "@/components/Disclaimer";
+import { ExposureCard } from "@/components/ExposureCard";
+import { FundLabSection } from "@/components/FundLabSection";
 import { HeroCards } from "@/components/HeroCards";
 import { HoldingsTable } from "@/components/HoldingsTable";
 import { McpConnectionStepper } from "@/components/McpConnectionStepper";
+import { RiskStrip } from "@/components/RiskStrip";
 import { StatusBar } from "@/components/StatusBar";
+import { ViewDrawer } from "@/components/ViewDrawer";
 import { WealthHero } from "@/components/WealthHero";
-import { formatValue } from "@/lib/format";
+import { formatInr, formatValue } from "@/lib/format";
 import { MCP_PUBLIC_ENDPOINT } from "@/lib/mcpDemoTools";
-import type { PortfolioResponse, PortfolioTotals } from "@/lib/types";
+import type { NormalizedHolding, PortfolioResponse, PortfolioTotals } from "@/lib/types";
 import { useSse } from "@/lib/useSse";
 
 const OAUTH_REFRESH_FLAG = "tw_oauth_refresh";
+
+function bookInr(h: NormalizedHolding): number {
+  const v = h.inr_market_value;
+  if (v != null && v > 0) return v;
+  return h.market_value;
+}
 
 async function fetchPortfolio(opts?: { refresh?: boolean }): Promise<PortfolioResponse> {
   const q = opts?.refresh ? "?refresh=1" : "";
@@ -44,6 +55,17 @@ export default function DashboardPage() {
   const [rulesMsg, setRulesMsg] = useState<string | null>(null);
   const [sseActive, setSseActive] = useState(true);
   const [sseGeneration, setSseGeneration] = useState(0);
+  const [highlightHoldingId, setHighlightHoldingId] = useState<string | null>(null);
+
+  const primaryInsight = useMemo(() => {
+    if (!data) return null;
+    return (
+      data.action_plan[0]?.issue ??
+      (data.alerts.concentration[0]
+        ? `Primary risk: ${data.alerts.concentration[0].name} at ${data.alerts.concentration[0].weight.toFixed(1)}% of book`
+        : null)
+    );
+  }, [data]);
 
   const reload = useCallback(async (opts?: { refresh?: boolean }) => {
     setErr(null);
@@ -64,7 +86,6 @@ export default function DashboardPage() {
     }
   }, []);
 
-  /** One mount path: OAuth query handling + portfolio load (avoids Strict Mode / double-effect races). */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -147,7 +168,7 @@ export default function DashboardPage() {
 
   function stopLiveStreamOnly() {
     setSseActive(false);
-    setRulesMsg("Live stream stopped (SSE closed). Use “Reconnect stream” or the full reset to resume.");
+    setRulesMsg("Live stream stopped (SSE closed).");
   }
 
   function reconnectStreamOnly() {
@@ -189,9 +210,7 @@ export default function DashboardPage() {
       onAlerts: (alerts) => {
         setData((prev) => (prev ? { ...prev, alerts } : prev));
       },
-      onStatus: () => {
-        /* heartbeat: optional future connection indicator */
-      },
+      onStatus: () => {},
     },
     sseActive,
     sseGeneration,
@@ -216,6 +235,20 @@ export default function DashboardPage() {
       fetchPortfolio().then(setData).catch(() => {});
     }
   }
+
+  const thrNum = parseFloat(thr) || 15;
+
+  const totalInrActive = useMemo(() => {
+    if (!data) return 0;
+    return data.holdings.reduce((s, h) => s + bookInr(h), 0);
+  }, [data]);
+
+  const onSelectHolding = useCallback((id: string) => {
+    setHighlightHoldingId(id);
+    window.setTimeout(() => {
+      document.getElementById(`holding-row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+  }, []);
 
   if (loading) {
     return (
@@ -251,84 +284,107 @@ export default function DashboardPage() {
     <main className="mx-auto max-w-6xl px-4 py-10">
       <header className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.35em] text-muted">True Wealth · Single investor · Read-only</p>
+          <p className="text-xs uppercase tracking-[0.35em] text-muted">True Wealth · Decision cockpit · Read-only</p>
           <p className="mt-2 max-w-xl text-sm text-muted">
-            Total wealth first, then allocation, holdings, and alerts. Status shows live vs empty book and last sync.
+            INR book, risk strip, and ranked actions first. Expand <strong>Data &amp; connection</strong> for MCP, SSE,
+            and rule edits.
           </p>
         </div>
-        <div className="flex max-w-xl flex-col gap-2 rounded-lg border border-line bg-surface/50 p-3">
-          <form onSubmit={saveRules} className="flex flex-wrap items-end gap-2">
-            <label className="text-xs text-muted">
-              Concentration limit (%)
-              <input
-                value={thr}
-                onChange={(e) => setThr(e.target.value)}
-                className="mt-1 block w-24 rounded border border-line bg-canvas px-2 py-1 font-mono text-sm text-ink"
-              />
-            </label>
-            <button
-              type="submit"
-              className="rounded-md bg-accent/90 px-3 py-2 text-xs font-medium text-twilight hover:bg-accent"
-            >
-              Update rules
-            </button>
-            {rulesMsg && <span className="text-xs text-muted">{rulesMsg}</span>}
-          </form>
-          <div className="border-t border-line/70 pt-2">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Stream &amp; data</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void stopStreamReloadReconnect()}
-                className="rounded-md border border-ion/40 bg-ion/[0.12] px-2.5 py-1.5 text-[11px] font-semibold text-ink hover:bg-ion/20"
-              >
-                Stop stream → reload MCP → reconnect
-              </button>
-              <button
-                type="button"
-                onClick={stopLiveStreamOnly}
-                className="rounded-md border border-line px-2.5 py-1.5 text-[11px] text-ink hover:border-ember/40"
-              >
-                Stop stream
-              </button>
-              <button
-                type="button"
-                onClick={() => void reloadPortfolioOnly()}
-                className="rounded-md border border-line px-2.5 py-1.5 text-[11px] text-ink hover:border-ion/35"
-              >
-                Reload from MCP
-              </button>
-              <button
-                type="button"
-                onClick={reconnectStreamOnly}
-                className="rounded-md border border-line px-2.5 py-1.5 text-[11px] text-ink hover:border-mintglass/40"
-              >
-                Reconnect stream
-              </button>
-            </div>
-            <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
-              Dev servers: stop existing <span className="font-mono">uvicorn</span> /{" "}
-              <span className="font-mono">npm run dev</span> before starting again (avoid duplicate ports). SSE here is
-              the browser live feed only.
-            </p>
-          </div>
-        </div>
+        {rulesMsg ? <p className="max-w-md text-xs text-ion/90">{rulesMsg}</p> : null}
       </header>
 
-      <WealthHero totals={data.totals} meta={data.meta} />
-      <div className="mt-6">
-        <McpConnectionStepper initialUrl={mcpUrl} meta={data.meta} onDone={() => void reload()} />
+      <WealthHero
+        totals={data.totals}
+        meta={data.meta}
+        performance={data.performance}
+        primaryInsight={primaryInsight}
+        alerts={data.alerts}
+      />
+
+      <div className="mt-5">
+        <RiskStrip data={data} />
       </div>
 
-      <StatusBar meta={data.meta} />
+      <div className="mt-5">
+        <DataDrawer title="Data & connection (MCP, SSE, rules)">
+          <div className="space-y-6">
+            <form onSubmit={saveRules} className="flex flex-wrap items-end gap-2">
+              <label className="text-xs text-muted">
+                Concentration limit (%)
+                <input
+                  value={thr}
+                  onChange={(e) => setThr(e.target.value)}
+                  className="mt-1 block w-24 rounded border border-line bg-canvas px-2 py-1 font-mono text-sm text-ink"
+                />
+              </label>
+              <button
+                type="submit"
+                className="rounded-md bg-accent/90 px-3 py-2 text-xs font-medium text-twilight hover:bg-accent"
+              >
+                Update rules
+              </button>
+            </form>
+            <McpConnectionStepper initialUrl={mcpUrl} meta={data.meta} onDone={() => void reload()} />
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Live stream &amp; MCP reload</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void stopStreamReloadReconnect()}
+                  className="rounded-md border border-ion/40 bg-ion/[0.12] px-2.5 py-1.5 text-[11px] font-semibold text-ink hover:bg-ion/20"
+                >
+                  Stop stream → reload MCP → reconnect
+                </button>
+                <button
+                  type="button"
+                  onClick={stopLiveStreamOnly}
+                  className="rounded-md border border-line px-2.5 py-1.5 text-[11px] text-ink"
+                >
+                  Stop stream
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void reloadPortfolioOnly()}
+                  className="rounded-md border border-line px-2.5 py-1.5 text-[11px] text-ink"
+                >
+                  Reload from MCP
+                </button>
+                <button type="button" onClick={reconnectStreamOnly} className="rounded-md border border-line px-2.5 py-1.5 text-[11px] text-ink">
+                  Reconnect stream
+                </button>
+              </div>
+            </div>
+          </div>
+        </DataDrawer>
+      </div>
+
+      <div className="mt-6 flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <StatusBar meta={data.meta} />
+        </div>
+        <ViewDrawer
+          triggerLabel={data.meta.active_view ? `View: ${data.meta.active_view.name}` : undefined}
+          onSaved={() => void fetchPortfolio().then(setData).catch(() => {})}
+        />
+      </div>
 
       <div className="mt-8 space-y-10">
-        <HeroCards totals={data.totals} />
-        <AllocationCharts
+        <ExposureCard
           by_asset_type={data.allocation.by_asset_type}
           by_currency={data.allocation.by_currency}
           by_country={data.allocation.by_country}
         />
+        <DecisionCharts
+          history={data.history}
+          holdings={data.holdings}
+          thresholdPct={thrNum}
+          meta={data.meta}
+          totalInrActive={totalInrActive}
+          highlightHoldingId={highlightHoldingId}
+          onSelectHolding={onSelectHolding}
+        />
+        <ActionPlanPanel items={data.action_plan} holdings={data.holdings} />
+        <HeroCards totals={data.totals} />
         <section>
           <h2 className="mb-3 font-display text-xl text-ink">Top holdings</h2>
           <div className="flex gap-3 overflow-x-auto pb-2">
@@ -339,18 +395,16 @@ export default function DashboardPage() {
               >
                 <p className="truncate text-sm font-medium text-ink">{h.name}</p>
                 <p className="font-mono text-xs text-muted">{h.symbol ?? "-"}</p>
-                <p className="mt-2 font-mono text-sm numeric text-ink">
-                  {formatValue(h.market_value, h.currency)}
+                <p className="mt-2 font-mono text-sm numeric text-ink">{formatInr(bookInr(h))}</p>
+                <p className="text-xs text-muted">
+                  {h.weight.toFixed(2)}% of book · native {formatValue(h.market_value, h.currency)}
                 </p>
-                <p className="text-xs text-muted">{h.weight.toFixed(2)}% of book</p>
               </div>
             ))}
           </div>
         </section>
-        <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-          <HoldingsTable holdings={data.holdings} />
-          <AlertsPanel alerts={data.alerts} />
-        </div>
+        <HoldingsTable holdings={data.holdings} highlightHoldingId={highlightHoldingId} />
+        <FundLabSection funds={data.mf_lab} onAfterMfRefresh={() => void fetchPortfolio().then(setData).catch(() => {})} />
       </div>
 
       <Disclaimer />

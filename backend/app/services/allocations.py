@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections import defaultdict
 
 from app.schemas import AllocationSlice, NormalizedHolding
+from app.services.fx_book import book_value_inr
 
 
 def _bucket_totals(holdings: list[NormalizedHolding], key_fn) -> dict[str, float]:
     acc: dict[str, float] = defaultdict(float)
     for h in holdings:
-        acc[key_fn(h)] += float(h.market_value or 0)
+        acc[key_fn(h)] += book_value_inr(h)
     return dict(acc)
 
 

@@ -95,9 +95,13 @@ TrueWealth/
 
 ## Internal API schema (normalized)
 
-**NormalizedHolding**: `id`, `name`, `symbol`, `isin`, `asset_type` (`IN_STOCK` | `US_STOCK` | `ETF` | `MF` | `CASH` | `OTHER`), `country` (`IN` | `US` | `OTHER`), `currency` (`INR` | `USD` | `OTHER`), `quantity`, `avg_cost`, `last_price`, `market_value`, `unrealized_pnl`, `day_change_value`, `weight` (% of book), `source` (`indmoney`), `updated_at`.
+**NormalizedHolding**: extended `asset_type` (e.g. `EPF`, `CRYPTO`, `FD`, …), optional `asset_class_l2`, native `market_value` in `currency`, plus **`inr_market_value`** / `inr_unrealized_pnl` / `inr_day_change_value` and optional `fx_usd_inr_used` for the single **INR book** used in totals and allocation.
 
-**PortfolioResponse**: `totals` (`market_value`, `day_change_value`, `day_change_pct`, `unrealized_pnl`), `allocation` (slices + `pct` for asset type / currency / country), `top_holdings`, `alerts` (concentration, `stale_data` + `last_sync`, `missing_cost_basis`), `holdings`, `meta` (`last_holdings_sync`, `last_price_sync`, `mode` `live`|`mock`, `mcp_endpoint`, `mcp_connected`, `mcp_degraded`, `tool_inventory`).
+**PortfolioResponse**: `totals` (all **INR** when `base_currency` is INR), `allocation` (slices by native tag but **values are INR-equivalent**), `action_plan`, `performance` (snapshot-based TWRR/drawdown/vol; XIRR status), `mf_lab`, `history` (daily INR snapshots for the **active** portfolio view when snapshot metadata matches), `meta.data_completeness`, `meta.fx_usd_inr`, plus **`meta.active_view`**, **`meta.full_book_totals`**, **`meta.excluded_value`**, **`meta.coverage`**, **`meta.history_matches_view`**, **`meta.last_snapshot_at`**.
+
+## Portfolio views
+
+Saved in SQLite (`portfolio_views` + `rules.active_portfolio_view_id`). The dashboard **View** control filters which asset groups count toward totals, holdings, allocation, concentration, action plan, and snapshot history. **`meta.full_book_totals`** is always the unfiltered INR book; **`meta.excluded_value`** is full minus active. Presets: **All assets** (everything on), **Investable only** (hides FD, EPF, gold, other bucket), **Locked long-term** (only FD, EPF, gold, other). API: `GET/POST /api/views`, `PUT /api/views/{id}`, `POST /api/views/active/{id}`, `POST /api/views/{id}/reset`. Changing toggles triggers a server-side recompute without MCP refresh.
 
 ## Prerequisites
 
@@ -113,6 +117,8 @@ Copy `.env.example` to `backend/.env` (or export vars in your shell). Important:
 | `INDMONEY_MCP_URL` | Optional override of the MCP JSON-RPC URL. If unset, the server uses INDmoney’s documented default **`https://mcp.indmoney.com/mcp`**. The dashboard can still save a different URL in SQLite (or clear to mock-only). |
 | `DATABASE_URL` | Optional override; default `sqlite+aiosqlite:///.../backend/data/truewealth.db`. |
 | `CORS_ORIGINS` | Comma-separated origins; default `http://localhost:3000`. |
+| `USDINR_RATE` | Static USD→INR spot for converting US legs into the INR book (default **83**). |
+| `OHLC_ENRICH_MAX` | Max MCP `get_indian_stocks_ohlc` calls per price refresh to proxy day P&amp;L when missing (default **5**). |
 
 ## Run migrations after pulling
 
@@ -120,7 +126,7 @@ Copy `.env.example` to `backend/.env` (or export vars in your shell). Important:
 cd backend && source .venv/bin/activate && alembic upgrade head
 ```
 
-New columns (e.g. `rules.mcp_endpoint` for the UI “Connect to INDmoney” flow) require this.
+New columns (holdings INR book, `mf_fund_cache`, `fx_rates`, rules MCP, OAuth, etc.) require this.
 
 ## Run the backend
 

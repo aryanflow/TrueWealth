@@ -13,8 +13,8 @@ export function HeroCards({ totals }: { totals: PortfolioTotals }) {
       <MetricTip
         label="Total market value"
         value={<span className="numeric">{formatInr(totals.market_value)}</span>}
-        definition="Sum of position market values after the latest price sync (LTP from broker when present, otherwise deterministic mock prices)."
-        source="Computed server-side from normalized holdings (INDmoney MCP or mock JSON)."
+        definition="INR book total: native USD legs converted at USDINR (env USDINR_RATE); all other rows treated as INR nominal."
+        source="Server `compute_portfolio` on INR-normalized holdings."
       />
       <MetricTip
         label="Day change"
@@ -24,8 +24,8 @@ export function HeroCards({ totals }: { totals: PortfolioTotals }) {
             <span className="text-lg md:text-xl">({formatPct(totals.day_change_pct)})</span>
           </span>
         }
-        definition="Aggregate of per-line day P&amp;L fields when the broker payload provides them; percent approximates day move vs prior close proxy."
-        source="Broker/MCP holding fields (day_change) or zero when absent."
+        definition="Sum of INR day P&amp;L when lines have day_change; optional OHLC proxy fills gaps for a few IN stocks per refresh."
+        source="Broker fields and optional MCP OHLC enrichment."
       />
       <MetricTip
         label="Unrealized P&amp;L"
@@ -34,12 +34,10 @@ export function HeroCards({ totals }: { totals: PortfolioTotals }) {
             {totals.unrealized_pnl == null ? "-" : formatInr(totals.unrealized_pnl)}
           </span>
         }
-        definition="Sum of (last price minus average cost) times quantity across lines with cost basis. Mixed currencies are summed numerically in V1. Figures shown in INR for readability, not FX-converted."
-        source="Derived from avg_cost and last_price on each holding."
+        definition="Sum of per-line unrealized P&amp;L converted to INR for USD positions using the same static USDINR as market value."
+        source="avg_cost × qty vs MV, then INR book layer."
       >
-        <p className="mt-2 text-xs text-warn">
-          Mixed INR/USD book: treat unrealized as indicative until FX is modeled.
-        </p>
+        <p className="mt-2 text-xs text-mintglass/90">INR book — totals reconcile in one base currency.</p>
       </MetricTip>
     </section>
   );

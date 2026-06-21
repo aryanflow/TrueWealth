@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -27,6 +27,13 @@ class HoldingCurrent(Base):
     market_value: Mapped[float] = mapped_column(Float, default=0.0)
     unrealized_pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     day_change_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Book in INR (native MV/PnL/day remain in `market_value` / unrealized / day_change in native CCY).
+    inr_market_value: Mapped[float] = mapped_column(Float, default=0.0)
+    inr_unrealized_pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    inr_day_change_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fx_usd_inr_used: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fx_as_of: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    asset_class_l2: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     source: Mapped[str] = mapped_column(String(64), default="indmoney")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -45,6 +52,34 @@ class Transaction(Base):
     traded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class FxRate(Base):
+    __tablename__ = "fx_rates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pair: Mapped[str] = mapped_column(String(16), default="USDINR")
+    rate: Mapped[float] = mapped_column(Float, default=0.0)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(64), default="static")
+
+
+class MfFundCache(Base):
+    __tablename__ = "mf_fund_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class PortfolioView(Base):
+    __tablename__ = "portfolio_views"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="All assets")
+    include_asset_groups: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class PortfolioSnapshot(Base):
@@ -67,6 +102,9 @@ class Rule(Base):
     mcp_endpoint: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     # Optional Bearer for MCP JSON-RPC (dashboard paste). Local dev only; do not commit DB with secrets.
     mcp_bearer_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active_portfolio_view_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("portfolio_views.id", ondelete="SET NULL"), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 

@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     holdings_refresh_sec: int = 120
     alerts_refresh_sec: int = 60
     heartbeat_sec: int = 15
+    usdinr_rate: float = Field(default=83.0, alias="USDINR_RATE", description="Static USD/INR spot for converting US book to INR (MVP).")
+    ohlc_enrich_max: int = Field(default=5, alias="OHLC_ENRICH_MAX", ge=0, le=30, description="Max MCP OHLC calls per price refresh for day-move proxy.")
 
     @property
     def cors_origins_list(self) -> List[str]:

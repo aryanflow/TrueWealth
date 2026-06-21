@@ -14,21 +14,34 @@ def pseudo_price(symbol: str | None, isin: str | None, seed: str = "truewealth-v
     return round(base, 4)
 
 
+def _to_float(v: object) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def apply_prices_to_holdings(
     holdings: list[dict],
 ) -> list[dict]:
-    """Mutate copies: set last_price if missing; recompute market_value and optional unrealized."""
+    """Mutate copies: set last_price if missing; only derive market_value when broker did not supply one."""
     out = []
     for h in holdings:
         row = dict(h)
         qty = float(row.get("quantity") or 0)
+        mval_existing = _to_float(row.get("market_value"))
         ltp = row.get("last_price")
         if ltp is None:
             row["last_price"] = pseudo_price(row.get("symbol"), row.get("isin"))
         lp = float(row["last_price"])
-        row["market_value"] = qty * lp
+        if mval_existing is None or abs(mval_existing) < 1e-9:
+            row["market_value"] = qty * lp
+        else:
+            row["market_value"] = mval_existing
         ac = row.get("avg_cost")
-        if ac is not None:
+        if row.get("unrealized_pnl") is None and ac is not None:
             try:
                 row["unrealized_pnl"] = (lp - float(ac)) * qty
             except (TypeError, ValueError):

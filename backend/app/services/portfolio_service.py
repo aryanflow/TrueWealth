@@ -6,23 +6,30 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import HoldingCurrent, RefreshLog, Rule, Transaction
+from app.models import HoldingCurrent, PortfolioSnapshot, RefreshLog, Rule, Transaction
 from app.schemas import (
+    ActiveViewSummary,
+    AssetType,
     ConcentrationAlert,
+    Currency,
+    DataCompleteness,
     NormalizedHolding,
     PortfolioAlerts,
     PortfolioAllocation,
     PortfolioMeta,
+    PortfolioPerformance,
     PortfolioResponse,
     PortfolioTotals,
 )
+from app.services.action_plan import build_action_plan
 from app.services.allocations import build_allocations
-from app.services.normalizer import extract_transactions
-from app.services.price_engine import apply_prices_to_holdings
+from app.services.fx_book import book_value_inr, sum_inr_market
+from app.services.performance_metrics import compute_performance_from_history
+from app.services.portfolio_views import build_coverage, filter_holdings_for_view
 
 log = logging.getLogger(__name__)
 
@@ -136,8 +143,28 @@ def holdings_to_dicts(holdings: list[NormalizedHolding]) -> list[dict[str, Any]]
         d["country"] = h.country.value
         d["currency"] = h.currency.value
         d["updated_at"] = h.updated_at.isoformat()
+        if h.fx_as_of:
+            d["fx_as_of"] = h.fx_as_of.isoformat()
         out.append(d)
     return out
+
+
+def _mf_smallcap_proxy_pct(holdings: list[NormalizedHolding]) -> float:
+    tot = sum_inr_market(holdings) or 1.0
+    s = 0.0
+    for h in holdings:
+        if h.asset_type != AssetType.MF:
+            continue
+        b = f"{h.name} {h.asset_class_l2 or ''}".lower()
+        if "small" in b:
+            s += book_value_inr(h)
+    return round(100.0 * s / tot, 4)
+
+
+def _usd_weight_pct(holdings: list[NormalizedHolding]) -> float:
+    tot = sum_inr_market(holdings) or 1.0
+    s = sum(book_value_inr(h) for h in holdings if h.currency == Currency.USD)
+    return round(100.0 * s / tot, 4)
 
 
 def compute_portfolio(
@@ -145,24 +172,27 @@ def compute_portfolio(
     *,
     rule: Rule,
     meta: PortfolioMeta,
+    txs_count: int = 0,
+    history: list[dict[str, Any]] | None = None,
+    mf_lab: list[Any] | None = None,
+    usd_inr: float = 83.0,
 ) -> PortfolioResponse:
-    total_mv = sum(float(h.market_value or 0) for h in holdings)
-    day_sum = sum(float(h.day_change_value or 0) for h in holdings if h.day_change_value is not None)
-    has_any_day = any(h.day_change_value is not None for h in holdings)
+    total_inr = sum_inr_market(holdings)
+    day_vals = [float(h.inr_day_change_value) for h in holdings if h.inr_day_change_value is not None]
+    day_sum = sum(day_vals) if day_vals else 0.0
+    has_any_day = bool(day_vals)
     day_pct = None
-    if has_any_day and total_mv - day_sum != 0:
-        denom = total_mv - day_sum
+    if has_any_day and total_inr - day_sum != 0:
+        denom = total_inr - day_sum
         if denom > 0:
             day_pct = round(100.0 * day_sum / denom, 4)
 
-    unreal = None
-    unreal_vals = [float(h.unrealized_pnl) for h in holdings if h.unrealized_pnl is not None]
-    if unreal_vals:
-        unreal = round(sum(unreal_vals), 4)
+    unreal_vals = [float(h.inr_unrealized_pnl) for h in holdings if h.inr_unrealized_pnl is not None]
+    unreal = round(sum(unreal_vals), 4) if unreal_vals else None
 
     weights: list[NormalizedHolding] = []
     for h in holdings:
-        w = (float(h.market_value) / total_mv) if total_mv > 0 else 0.0
+        w = (book_value_inr(h) / total_inr) if total_inr > 0 else 0.0
         nh = h.model_copy(update={"weight": round(w * 100.0, 4)})
         weights.append(nh)
     weights.sort(key=lambda x: -x.weight)
@@ -174,8 +204,21 @@ def compute_portfolio(
     conc: list[ConcentrationAlert] = []
     for h in weights:
         if h.weight >= thr:
+            mv = book_value_inr(h)
+            tgt_mv = thr / 100.0 * total_inr if total_inr > 0 else 0.0
+            trim = max(0.0, mv - tgt_mv)
+            dilute = max(0.0, (h.weight / 100.0 * total_inr) * ((h.weight / max(thr, 1e-6)) - 1.0))
             conc.append(
-                ConcentrationAlert(holding_id=h.id, name=h.name, weight=h.weight, threshold=thr)
+                ConcentrationAlert(
+                    holding_id=h.id,
+                    name=h.name,
+                    weight=h.weight,
+                    threshold=thr,
+                    target_weight_pct=thr,
+                    inr_market_value=round(mv, 4),
+                    suggested_trim_inr=round(trim, 4),
+                    suggested_dilute_inr=round(dilute, 4),
+                )
             )
 
     last_sync = meta.last_holdings_sync
@@ -188,6 +231,46 @@ def compute_portfolio(
         stale = True
 
     missing = [h.name for h in weights if h.avg_cost is None and h.asset_type.value != "CASH"]
+    missing_n = len(missing)
+    excluded_n = sum(1 for h in holdings if not h.book_include)
+    excluded_names = [h.name[:48] or (h.symbol or "") or h.id for h in holdings if not h.book_include][:6]
+    excluded_hint = ""
+    if excluded_n:
+        excluded_hint = f"{excluded_n} holding(s) excluded due to suspicious price mapping"
+        if excluded_names:
+            excluded_hint += f": {', '.join(excluded_names)}"
+        if excluded_n > len(excluded_names):
+            excluded_hint += ", …"
+    score = max(0.0, 100.0 - 4.0 * missing_n - (10.0 if any(h.currency == Currency.USD for h in weights) else 0.0))
+    dc = DataCompleteness(
+        score=round(score, 2),
+        fx_mode="static",
+        missing_cost_basis_count=missing_n,
+        transactions_available=txs_count > 0,
+        ohlc_coverage_pct=0.0,
+        excluded_suspicious_price_count=excluded_n,
+        excluded_suspicious_price_hint=excluded_hint,
+    )
+    meta_out = meta.model_copy(
+        update={
+            "base_currency": "INR",
+            "fx_usd_inr": float(usd_inr),
+            "fx_as_of": _dt_now(),
+            "data_completeness": dc,
+        }
+    )
+
+    hist = history or []
+    perf = compute_performance_from_history(hist, txs_count)
+    usd_w = _usd_weight_pct(weights)
+    mf_sc = _mf_smallcap_proxy_pct(weights)
+    actions = build_action_plan(
+        weights,
+        concentration=conc,
+        total_inr=total_inr,
+        usd_weight_pct=usd_w,
+        mf_smallcap_proxy_pct=mf_sc,
+    )
 
     alerts = PortfolioAlerts(
         concentration=conc,
@@ -197,10 +280,11 @@ def compute_portfolio(
     )
 
     totals = PortfolioTotals(
-        market_value=round(total_mv, 4),
+        market_value=round(total_inr, 4),
         day_change_value=round(day_sum, 4) if has_any_day else 0.0,
         day_change_pct=day_pct,
         unrealized_pnl=unreal,
+        base_currency="INR",
     )
 
     top10 = weights[:10]
@@ -210,14 +294,17 @@ def compute_portfolio(
         top_holdings=top10,
         alerts=alerts,
         holdings=weights,
-        meta=meta,
+        meta=meta_out,
+        action_plan=actions,
+        performance=perf,
+        mf_lab=list(mf_lab or []),
+        history=hist[-400:],
     )
 
 
 async def persist_holdings(session: AsyncSession, holdings: list[NormalizedHolding]) -> None:
     await session.execute(delete(HoldingCurrent))
     await session.flush()
-    # Last row wins if upstream ever emits duplicate ids for distinct positions.
     by_id: dict[str, NormalizedHolding] = {}
     for h in holdings:
         by_id[h.id] = h
@@ -237,6 +324,12 @@ async def persist_holdings(session: AsyncSession, holdings: list[NormalizedHoldi
                 market_value=h.market_value,
                 unrealized_pnl=h.unrealized_pnl,
                 day_change_value=h.day_change_value,
+                inr_market_value=float(h.inr_market_value or 0.0),
+                inr_unrealized_pnl=h.inr_unrealized_pnl,
+                inr_day_change_value=h.inr_day_change_value,
+                fx_usd_inr_used=h.fx_usd_inr_used,
+                fx_as_of=h.fx_as_of,
+                asset_class_l2=h.asset_class_l2,
                 weight=h.weight,
                 source=h.source,
                 updated_at=h.updated_at,
@@ -290,7 +383,157 @@ async def read_holdings_from_db(session: AsyncSession) -> list[NormalizedHolding
                     "weight": r.weight,
                     "source": r.source,
                     "updated_at": r.updated_at,
+                    "asset_class_l2": getattr(r, "asset_class_l2", None),
+                    "inr_market_value": float(getattr(r, "inr_market_value", 0) or 0),
+                    "inr_unrealized_pnl": getattr(r, "inr_unrealized_pnl", None),
+                    "inr_day_change_value": getattr(r, "inr_day_change_value", None),
+                    "fx_usd_inr_used": getattr(r, "fx_usd_inr_used", None),
+                    "fx_as_of": getattr(r, "fx_as_of", None),
                 }
             )
         )
     return out
+
+
+async def append_portfolio_snapshot_inr(
+    session: AsyncSession,
+    *,
+    full_inr: float,
+    active_inr: float,
+    active_view_id: str | None,
+    now: datetime | None = None,
+) -> None:
+    ts = now or _dt_now()
+    d = ts.strftime("%Y-%m-%d")
+    await session.execute(delete(PortfolioSnapshot).where(PortfolioSnapshot.snapshot_date == d))
+    payload = {
+        "base_currency": "INR",
+        "captured_at": ts.isoformat(),
+        "full_inr": float(full_inr),
+        "active_inr": float(active_inr),
+        "active_view_id": active_view_id,
+    }
+    session.add(
+        PortfolioSnapshot(
+            snapshot_date=d,
+            market_value=float(full_inr),
+            payload_json=json.dumps(payload),
+            created_at=ts,
+        )
+    )
+    await session.commit()
+
+
+def _history_from_snapshots(
+    rows: list[Any],
+    *,
+    active_view_id: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Build active-view INR series for charts. Returns (history_points, history_matches_view)."""
+    points: list[dict[str, Any]] = []
+    any_skipped = False
+    for r in rows:
+        payload: dict[str, Any] = {}
+        if r.payload_json:
+            try:
+                payload = json.loads(r.payload_json)
+            except json.JSONDecodeError:
+                payload = {}
+        full_v = float(payload.get("full_inr", r.market_value))
+        active_v = float(payload.get("active_inr", r.market_value))
+        vid = payload.get("active_view_id")
+        legacy = "full_inr" not in payload and "active_inr" not in payload
+        if legacy or not active_view_id or vid is None or str(vid) == str(active_view_id):
+            points.append(
+                {
+                    "snapshot_date": r.snapshot_date,
+                    "inr_market_value": active_v,
+                    "inr_full_book": full_v,
+                }
+            )
+        else:
+            any_skipped = True
+    n_raw = len(rows)
+    matches = True
+    if any_skipped and len(points) < 2 and n_raw >= 2:
+        matches = False
+    return points, matches
+
+
+async def load_portfolio_history(
+    session: AsyncSession, limit: int = 500, *, active_view_id: str | None = None
+) -> tuple[list[dict[str, Any]], bool]:
+    res = await session.execute(select(PortfolioSnapshot).order_by(PortfolioSnapshot.created_at.asc()).limit(limit))
+    rows = list(res.scalars().all())
+    pts, flag = _history_from_snapshots(rows, active_view_id=active_view_id)
+    return pts[-400:], flag
+
+
+async def latest_snapshot_at(session: AsyncSession) -> datetime | None:
+    res = await session.execute(select(func.max(PortfolioSnapshot.created_at)))
+    return res.scalar_one_or_none()
+
+
+async def assemble_portfolio_response(
+    session: AsyncSession,
+    *,
+    all_holdings: list[NormalizedHolding],
+    meta_in: PortfolioMeta,
+    rule: Rule,
+    txs_count: int,
+    mf_lab_full: list[Any],
+    usd_inr: float,
+) -> PortfolioResponse:
+    """Full book plus active view filter, merged meta for API and SSE."""
+    from app.services.portfolio_views import load_active_view_row, parse_include_json
+
+    view_row, include_map = await load_active_view_row(session)
+    active_vid = view_row.id if view_row else None
+    hist, hist_match = await load_portfolio_history(session, active_view_id=active_vid)
+    last_snap = await latest_snapshot_at(session)
+
+    full = compute_portfolio(
+        all_holdings,
+        rule=rule,
+        meta=meta_in,
+        txs_count=txs_count,
+        history=hist,
+        mf_lab=mf_lab_full,
+        usd_inr=usd_inr,
+    )
+    filtered = filter_holdings_for_view(all_holdings, include_map)
+    filt_ids = {h.id for h in filtered}
+    mf_filtered = [x for x in (mf_lab_full or []) if getattr(x, "holding_id", None) in filt_ids]
+
+    active = compute_portfolio(
+        filtered,
+        rule=rule,
+        meta=meta_in,
+        txs_count=txs_count,
+        history=hist,
+        mf_lab=mf_filtered,
+        usd_inr=usd_inr,
+    )
+
+    excluded = round(max(0.0, full.totals.market_value - active.totals.market_value), 4)
+    cov = build_coverage(all_holdings, mcp_live=meta_in.mode == "live")
+
+    av: ActiveViewSummary | None = None
+    if view_row:
+        av = ActiveViewSummary(
+            id=view_row.id,
+            name=view_row.name,
+            include_asset_groups=parse_include_json(view_row.include_asset_groups),
+        )
+
+    meta_out = active.meta.model_copy(
+        update={
+            "full_book_totals": full.totals,
+            "excluded_value": excluded,
+            "active_view": av,
+            "coverage": cov,
+            "history_matches_view": hist_match,
+            "last_snapshot_at": last_snap,
+        }
+    )
+    return active.model_copy(update={"meta": meta_out, "mf_lab": mf_filtered})
