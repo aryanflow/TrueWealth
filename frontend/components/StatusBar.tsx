@@ -79,13 +79,10 @@ export function StatusBar({ meta }: { meta: PortfolioMeta }) {
       {dc && !dc.transactions_available ? (
         <span className="rounded-full border border-line px-2 py-1 font-mono text-muted">Tx: unavailable</span>
       ) : null}
-      <span className="ml-auto hidden font-mono text-[11px] text-muted/80 lg:block">
-        Tools discovered: {meta.tool_inventory.length ? meta.tool_inventory.join(", ") : "-"}
-      </span>
       </div>
       {hasCov && meta.mode === "live" ? (
         <p className="text-[11px] leading-relaxed text-muted">
-          <span className="font-medium text-ink/80">Coverage:</span> {covProvided ?? "—"}.
+          <span className="font-medium text-ink/80">Coverage:</span> {covProvided ?? "n/a"}.
           {covAbsent ? (
             <>
               {" "}

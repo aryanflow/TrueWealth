@@ -23,17 +23,59 @@ from app.schemas import (
     PortfolioMeta,
     PortfolioPerformance,
     PortfolioResponse,
+    PortfolioStatus,
     PortfolioTotals,
 )
 from app.services.action_plan import build_action_plan
 from app.services.allocations import build_allocations
-from app.services.fx_book import book_value_inr, sum_inr_market
+from app.services.fx_book import book_value_inr, dedupe_holdings_by_instrument, sum_inr_market
 from app.services.performance_metrics import compute_performance_from_history
 from app.services.portfolio_views import build_coverage, filter_holdings_for_view
 
 log = logging.getLogger(__name__)
 
 SAMPLE_DIR = Path(__file__).resolve().parent.parent.parent / "sample_data"
+
+
+def derive_data_confidence(
+    *,
+    mode: str,
+    mcp_degraded: bool,
+    stale_data: bool,
+    invalid_price_count: int,
+    missing_cost_basis_count: int,
+) -> str:
+    """
+    Maps backend signals to the Today tab badge (good, partial, or degraded).
+
+    Degraded: MCP flagged unhealthy, holdings sync is stale versus the rule window, or at least
+    one line was excluded from the INR book for invalid native price mapping.
+
+    Partial: the book is not on the live MCP path, or one or more positions are missing average
+    cost (non-cash names still need basis for PnL quality).
+
+    Good: live path, MCP healthy, sync fresh enough, no invalid-price exclusions, no missing cost
+    on applicable rows.
+    """
+    if mcp_degraded or stale_data or invalid_price_count > 0:
+        return "degraded"
+    if mode != "live" or missing_cost_basis_count > 0:
+        return "partial"
+    return "good"
+
+
+async def fetch_latest_refresh_error(session: AsyncSession) -> str | None:
+    res = await session.execute(
+        select(RefreshLog.message)
+        .where(RefreshLog.status == "error")
+        .order_by(RefreshLog.id.desc())
+        .limit(1)
+    )
+    row = res.scalar_one_or_none()
+    if not row:
+        return None
+    s = (row or "").strip()
+    return s[:800] if s else None
 
 
 def _dt_now() -> datetime:
@@ -167,6 +209,13 @@ def _usd_weight_pct(holdings: list[NormalizedHolding]) -> float:
     return round(100.0 * s / tot, 4)
 
 
+def _global_equity_offshore_pct(holdings: list[NormalizedHolding]) -> float:
+    """US_STOCK sleeve as % of INR book (not the same as USD *currency* leg)."""
+    tot = sum_inr_market(holdings) or 1.0
+    s = sum(book_value_inr(h) for h in holdings if h.asset_type == AssetType.US_STOCK)
+    return round(100.0 * s / tot, 4)
+
+
 def compute_portfolio(
     holdings: list[NormalizedHolding],
     *,
@@ -175,8 +224,9 @@ def compute_portfolio(
     txs_count: int = 0,
     history: list[dict[str, Any]] | None = None,
     mf_lab: list[Any] | None = None,
-    usd_inr: float = 83.0,
+    usd_inr: float = 94.61,
 ) -> PortfolioResponse:
+    holdings = dedupe_holdings_by_instrument(list(holdings))
     total_inr = sum_inr_market(holdings)
     day_vals = [float(h.inr_day_change_value) for h in holdings if h.inr_day_change_value is not None]
     day_sum = sum(day_vals) if day_vals else 0.0
@@ -249,20 +299,45 @@ def compute_portfolio(
         transactions_available=txs_count > 0,
         ohlc_coverage_pct=0.0,
         excluded_suspicious_price_count=excluded_n,
+        invalid_price_count=excluded_n,
         excluded_suspicious_price_hint=excluded_hint,
     )
+    confidence = derive_data_confidence(
+        mode=meta.mode,
+        mcp_degraded=meta.mcp_degraded,
+        stale_data=stale,
+        invalid_price_count=excluded_n,
+        missing_cost_basis_count=missing_n,
+    )
+    confidence_notes: list[str] = []
+    if meta.mode != "live":
+        confidence_notes.append("Book is not on the live MCP refresh path.")
+    if meta.mcp_degraded:
+        confidence_notes.append("MCP is degraded or missing a holdings tool.")
+    if stale:
+        confidence_notes.append("Holdings sync looks stale versus your refresh window.")
+    if missing_n:
+        confidence_notes.append(f"{missing_n} holding(s) missing cost basis (PnL quality).")
+    if excluded_n:
+        confidence_notes.append(f"{excluded_n} line(s) excluded from INR totals (suspicious native price mapping).")
+    if str(meta.mode) == "live" and not stale and not missing_n and not excluded_n and not meta.mcp_degraded:
+        confidence_notes.append("Live path, fresh sync, no excluded lines in this pass.")
+
     meta_out = meta.model_copy(
         update={
             "base_currency": "INR",
             "fx_usd_inr": float(usd_inr),
             "fx_as_of": _dt_now(),
             "data_completeness": dc,
+            "confidence": confidence,
+            "confidence_notes": confidence_notes,
         }
     )
 
     hist = history or []
     perf = compute_performance_from_history(hist, txs_count)
     usd_w = _usd_weight_pct(weights)
+    offshore_w = _global_equity_offshore_pct(weights)
     mf_sc = _mf_smallcap_proxy_pct(weights)
     actions = build_action_plan(
         weights,
@@ -270,6 +345,7 @@ def compute_portfolio(
         total_inr=total_inr,
         usd_weight_pct=usd_w,
         mf_smallcap_proxy_pct=mf_sc,
+        global_equity_offshore_pct=float(offshore_w),
     )
 
     alerts = PortfolioAlerts(
@@ -299,10 +375,14 @@ def compute_portfolio(
         performance=perf,
         mf_lab=list(mf_lab or []),
         history=hist[-400:],
+        usd_exposure_pct=float(usd_w),
+        global_equity_offshore_pct=float(offshore_w),
+        allocation_full_book=None,
     )
 
 
 async def persist_holdings(session: AsyncSession, holdings: list[NormalizedHolding]) -> None:
+    holdings = dedupe_holdings_by_instrument(list(holdings))
     await session.execute(delete(HoldingCurrent))
     await session.flush()
     by_id: dict[str, NormalizedHolding] = {}
@@ -392,7 +472,7 @@ async def read_holdings_from_db(session: AsyncSession) -> list[NormalizedHolding
                 }
             )
         )
-    return out
+    return dedupe_holdings_by_instrument(out)
 
 
 async def append_portfolio_snapshot_inr(
@@ -503,7 +583,23 @@ async def assemble_portfolio_response(
     )
     filtered = filter_holdings_for_view(all_holdings, include_map)
     filt_ids = {h.id for h in filtered}
-    mf_filtered = [x for x in (mf_lab_full or []) if getattr(x, "holding_id", None) in filt_ids]
+
+    def _dedupe_mf_lab(xs: list[Any]) -> list[Any]:
+        by: dict[str, Any] = {}
+        for x in xs or []:
+            hid = getattr(x, "holding_id", None)
+            if not hid:
+                continue
+            cur = by.get(str(hid))
+            if cur is None:
+                by[str(hid)] = x
+                continue
+            st = getattr(x, "data_status", "")
+            if st == "ok" and getattr(cur, "data_status", "") != "ok":
+                by[str(hid)] = x
+        return list(by.values())
+
+    mf_filtered = _dedupe_mf_lab([x for x in (mf_lab_full or []) if getattr(x, "holding_id", None) in filt_ids])
 
     active = compute_portfolio(
         filtered,
@@ -526,6 +622,7 @@ async def assemble_portfolio_response(
             include_asset_groups=parse_include_json(view_row.include_asset_groups),
         )
 
+    last_err = await fetch_latest_refresh_error(session)
     meta_out = active.meta.model_copy(
         update={
             "full_book_totals": full.totals,
@@ -534,6 +631,30 @@ async def assemble_portfolio_response(
             "coverage": cov,
             "history_matches_view": hist_match,
             "last_snapshot_at": last_snap,
+            "last_error": last_err,
         }
     )
-    return active.model_copy(update={"meta": meta_out, "mf_lab": mf_filtered})
+    full_alloc = full.allocation if excluded > 0.01 else None
+    return active.model_copy(
+        update={"meta": meta_out, "mf_lab": mf_filtered, "allocation_full_book": full_alloc},
+    )
+
+
+def portfolio_response_to_status(pr: PortfolioResponse, *, mcp_endpoint: str | None) -> PortfolioStatus:
+    dc = pr.meta.data_completeness
+    inv = int(dc.invalid_price_count if dc else 0)
+    return PortfolioStatus(
+        confidence=pr.meta.confidence,
+        mcp_connected=pr.meta.mcp_connected,
+        mcp_degraded=pr.meta.mcp_degraded,
+        indmoney_oauth_connected=bool(pr.meta.indmoney_oauth_connected),
+        mode=pr.meta.mode,
+        last_holdings_sync=pr.meta.last_holdings_sync,
+        last_price_sync=pr.meta.last_price_sync,
+        stale_data=pr.alerts.stale_data,
+        missing_cost_basis_count=int(dc.missing_cost_basis_count if dc else 0),
+        invalid_price_count=inv,
+        fx_mode=str(dc.fx_mode if dc else "static"),
+        last_error=pr.meta.last_error,
+        mcp_endpoint=mcp_endpoint,
+    )

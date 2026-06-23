@@ -13,6 +13,11 @@ log = logging.getLogger(__name__)
 
 async def loop_prices() -> None:
     while True:
+        interval = max(await _rules_interval("price"), 5)
+        await asyncio.sleep(interval)
+        if state.refresh_lock_busy():
+            log.debug("price loop: skip — portfolio refresh in progress")
+            continue
         try:
             async with SessionLocal() as session:
                 pf = await state.refresh_prices(session)
@@ -25,11 +30,20 @@ async def loop_prices() -> None:
                 )
         except Exception as e:  # noqa: BLE001
             log.exception("price loop: %s", e)
-        await asyncio.sleep(max(await _rules_interval("price"), 5))
 
 
 async def loop_holdings() -> None:
     while True:
+        interval = max(await _rules_interval("holdings"), 60)
+        await asyncio.sleep(interval)
+        if state.refresh_lock_busy():
+            log.debug("holdings loop: skip — portfolio refresh in progress")
+            continue
+        if state.last_holdings_sync is not None:
+            age = (datetime.now(timezone.utc) - state.last_holdings_sync).total_seconds()
+            if age < interval * 0.85:
+                log.debug("holdings loop: skip — synced %.0fs ago (interval %ss)", age, interval)
+                continue
         try:
             async with SessionLocal() as session:
                 pf = await state.refresh_holdings(session)
@@ -45,7 +59,6 @@ async def loop_holdings() -> None:
                 )
         except Exception as e:  # noqa: BLE001
             log.exception("holdings loop: %s", e)
-        await asyncio.sleep(max(await _rules_interval("holdings"), 30))
 
 
 async def loop_alerts() -> None:

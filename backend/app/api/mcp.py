@@ -13,6 +13,20 @@ from app.state import state
 router = APIRouter()
 
 
+def _mcp_ok_response() -> McpConnectResponse:
+    return McpConnectResponse(
+        ok=True,
+        mcp_endpoint=state.effective_mcp_url,
+        mcp_connected=state.mcp_connected,
+        mcp_degraded=state.mcp_degraded,
+        tool_inventory=list(state.tool_inventory),
+        mcp_tools=list(state.mcp_tools),
+        mcp_holdings_tool=state.adapter._holdings_tool,
+        mcp_transactions_tool=state.adapter._tx_tool,
+        mode=state.mode,
+    )
+
+
 class McpConnectBody(BaseModel):
     mcp_endpoint: str = Field(..., min_length=1, max_length=2048)
 
@@ -42,14 +56,7 @@ async def mcp_connect(body: McpConnectBody, session: AsyncSession = Depends(get_
     await state.startup_discover(session)
     await state.refresh_holdings(session)
     await state.refresh_prices(session)
-    return McpConnectResponse(
-        ok=True,
-        mcp_endpoint=state.effective_mcp_url,
-        mcp_connected=state.mcp_connected,
-        mcp_degraded=state.mcp_degraded,
-        tool_inventory=list(state.tool_inventory),
-        mode=state.mode,
-    )
+    return _mcp_ok_response()
 
 
 @router.post("/mcp/bearer", response_model=McpConnectResponse)
@@ -60,14 +67,7 @@ async def mcp_save_bearer(body: McpBearerBody, session: AsyncSession = Depends(g
     await state.startup_discover(session)
     await state.refresh_holdings(session)
     await state.refresh_prices(session)
-    return McpConnectResponse(
-        ok=True,
-        mcp_endpoint=state.effective_mcp_url,
-        mcp_connected=state.mcp_connected,
-        mcp_degraded=state.mcp_degraded,
-        tool_inventory=list(state.tool_inventory),
-        mode=state.mode,
-    )
+    return _mcp_ok_response()
 
 
 @router.post("/mcp/disconnect", response_model=McpConnectResponse)
@@ -76,13 +76,5 @@ async def mcp_disconnect(session: AsyncSession = Depends(get_session)) -> McpCon
     await clear_stored_mcp_url(session)
     await state.apply_mcp_endpoint_from_db(session)
     await state.startup_discover(session)
-    await state.refresh_holdings(session)
-    await state.refresh_prices(session)
-    return McpConnectResponse(
-        ok=True,
-        mcp_endpoint=state.effective_mcp_url,
-        mcp_connected=state.mcp_connected,
-        mcp_degraded=state.mcp_degraded,
-        tool_inventory=list(state.tool_inventory),
-        mode=state.mode,
-    )
+    await state.clear_portfolio_book(session)
+    return _mcp_ok_response()

@@ -12,7 +12,7 @@ alwaysApply: true
 ## You take care of almost everything
 
 - **You** install, migrate, test, build, and start/stop dev servers. Do not hand the user a checklist of commands unless they explicitly want instructions only.
-- **Restarting dev**: stop the existing **uvicorn** and **Next** processes first (Ctrl+C or end the background job), then start again so ports are free and `.next` / hot reload does not get confused.
+- **Dev servers and background jobs**: behave like a **teammate at the terminal** with full CLI access—**smart, end-to-end, zero human intervention** for routine process control. If you would otherwise **wait** for a background activity to be closed, a port to free, or the user to stop a server—**do not wait**: **stop or end the process yourself** (`pkill` matching **uvicorn** / **next dev** when safe, or end the prior background shell), then **start fresh** so **:8000** and **:3000** are correct. **Do not ask** the user to Ctrl+C, kill processes, or clear ports. After the stack is up and loaded, you may ask them **once** to **check the UI** in the browser—**nothing else** about starting or managing servers.
 - Fix missing venv, `node_modules`, migrations, and broken CI yourself when changes are safe and reversible; say what you did in plain language.
 - Prefer running `alembic upgrade head`, `pytest`, and `npm run build` after meaningful backend or frontend edits.
 

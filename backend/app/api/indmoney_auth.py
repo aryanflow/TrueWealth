@@ -40,13 +40,15 @@ def _oauth_return_url(base: str, *, ok: bool, detail: str = "") -> str:
 
 
 async def _post_oauth_mcp_warmup() -> None:
-    """Run after browser redirect — MCP can be slow; do not block the OAuth callback response."""
-    log.info("Post-OAuth: MCP discover + holdings refresh (background)")
+    """Run after browser redirect — MCP can be slow; do not block the OAuth callback response.
+
+    Holdings refresh is left to the frontend ``GET /api/portfolio?refresh=1`` after OAuth
+    so we do not double-fetch (16+ MCP calls) and trip INDmoney rate limits.
+    """
+    log.info("Post-OAuth: MCP discover only (background); UI triggers portfolio refresh")
     try:
         async with SessionLocal() as bg:
             await state.startup_discover(bg)
-            await state.refresh_holdings(bg)
-            await state.refresh_prices(bg)
     except Exception:  # noqa: BLE001
         log.exception("Post-OAuth MCP warmup failed")
 
@@ -212,4 +214,5 @@ async def indmoney_auth_disconnect(session: AsyncSession = Depends(get_session))
     await imo.revoke_and_clear_oauth(session)
     await state.refresh_mcp_auth_from_rule(session)
     await state.startup_discover(session)
+    await state.clear_portfolio_book(session)
     return {"ok": True}

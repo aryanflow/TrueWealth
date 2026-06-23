@@ -4,6 +4,8 @@ Single-user **read-only** portfolio dashboard for an Indian investor. **INDmoney
 
 **Not investment advice.** No trades, no stored broker passwords.
 
+The main app uses route tabs: **`/today`**, **`/map`**, **`/decide`** (home redirects to `/today`). See [VERIFICATION.md](./VERIFICATION.md) for commands and a manual QA checklist.
+
 ## Repository layout
 
 ```
@@ -54,6 +56,8 @@ TrueWealth/
 │   ├── sample_data/
 │   │   ├── holdings.json
 │   │   └── transactions.json
+│   ├── scripts/
+│   │   └── mcp_probe.py           # CLI: tools/list + optional holdings summary
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_normalizer.py
@@ -117,7 +121,7 @@ Copy `.env.example` to `backend/.env` (or export vars in your shell). Important:
 | `INDMONEY_MCP_URL` | Optional override of the MCP JSON-RPC URL. If unset, the server uses INDmoney’s documented default **`https://mcp.indmoney.com/mcp`**. The dashboard can still save a different URL in SQLite (or clear to mock-only). |
 | `DATABASE_URL` | Optional override; default `sqlite+aiosqlite:///.../backend/data/truewealth.db`. |
 | `CORS_ORIGINS` | Comma-separated origins; default `http://localhost:3000`. |
-| `USDINR_RATE` | Static USD→INR spot for converting US legs into the INR book (default **83**). |
+| `USDINR_RATE` | Static USD→INR spot for converting US legs into the INR book when the broker does not send INR book fields (default **94.61**; override via env). |
 | `OHLC_ENRICH_MAX` | Max MCP `get_indian_stocks_ohlc` calls per price refresh to proxy day P&amp;L when missing (default **5**). |
 
 ## Run migrations after pulling
@@ -187,6 +191,21 @@ INDmoney’s page explains that connecting (e.g. in Claude) opens their sign-in 
 3. If the page says it **could not load portfolio**, fix the API first (wrong port, firewall, or uvicorn not running).
 4. **Save token & connect** (dashboard): saves the MCP URL, optionally saves a pasted Bearer to SQLite, then runs discovery. Expand the in-page **Help** disclosure for how INDmoney’s Claude flow differs from this app. Without auth, INDmoney usually returns **401** and the UI stays on **mock**.
 
+## Probe INDmoney MCP (CLI)
+
+From `backend/`, with `backend/.env` loaded (same variables as the API: `INDMONEY_MCP_URL`, `INDMONEY_MCP_BEARER_TOKEN`):
+
+```bash
+cd backend
+python3 scripts/mcp_probe.py
+python3 scripts/mcp_probe.py --holdings
+python3 scripts/mcp_probe.py --env-only   # ignore SQLite; .env bearer only
+```
+
+By default the script reads **`DATABASE_URL`** (default `backend/data/truewealth.db`) and uses the same token order as the API: **OAuth access token** (if `expires_at` is still in the future), then **saved MCP bearer** from the dashboard, then **`INDMONEY_MCP_BEARER_TOKEN`**. It does **not** refresh an expired OAuth row from the CLI—use the app or set a bearer in `.env`. It prints the resolved MCP URL, auth source, `tools/list` entries, selected holdings/tx tools, and with `--holdings` a short normalized summary. **`--env-only`** skips SQLite (matches your terminal when only `.env` is set and no token).
+
+If nothing provides a Bearer, INDmoney returns **401**; the script prints short next steps.
+
 ## MCP troubleshooting
 
 1. **Discovery**: On startup the API logs discovered tool names and the heuristic pick for “holdings-like” and “transactions-like” tools (keyword scoring, no hardcoded vendor tool IDs).
@@ -196,6 +215,12 @@ INDmoney’s page explains that connecting (e.g. in Claude) opens their sign-in 
 ## Mock mode
 
 If you choose **mock-only** from the dashboard (cleared URL), or MCP discovery/calls fail, holdings load from `backend/sample_data/holdings.json` (and transactions from `transactions.json`). `meta.mode` is `mock` and the UI shows a **Mock book** pill.
+
+## Scope & limitations (V1)
+
+Indian tax lots, STT/LTCG sequencing, SIP-specific cost basis, and per-name FX hedges are **not modeled** in the dashboard math—figures are indicative for allocation and risk triage only. Target-date glidepaths and automated tax harvesting remain out of scope until lot-level data is available.
+
+**Planned follow-ups (not in V1 UI):** a dedicated **tax context** panel needs purchase dates / tenure from MCP or manual DB columns; a **target allocation** widget needs persisted targets, drift math versus `allocation`, and Decide/Map surfacing—track as larger features when product priority allows.
 
 ## Tests
 

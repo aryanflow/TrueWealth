@@ -21,17 +21,19 @@ body {
   }
 }
 
+/* Fixed full viewport; negative inset + absolute previously widened past 100vw and caused horizontal scroll. */
 .depth-field {
-  position: absolute;
-  inset: -20%;
+  position: fixed;
+  inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(closest-side at 18% 22%, rgba(110, 168, 255, 0.18), transparent 60%),
-    radial-gradient(closest-side at 74% 26%, rgba(104, 215, 198, 0.14), transparent 60%),
+    radial-gradient(closest-side at 18% 22%, rgba(110, 168, 255, 0.16), transparent 60%),
+    radial-gradient(closest-side at 74% 26%, rgba(104, 215, 198, 0.12), transparent 60%),
     radial-gradient(closest-side at 58% 74%, rgba(255, 204, 102, 0.1), transparent 65%),
     radial-gradient(closest-side at 24% 72%, rgba(255, 125, 154, 0.08), transparent 65%);
   filter: blur(34px) saturate(115%);
-  opacity: 0.88;
+  opacity: 0.9;
+  transform: translateZ(0);
 }
 
 .numeric {

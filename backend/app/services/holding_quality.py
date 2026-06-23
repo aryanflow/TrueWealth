@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from app.config import settings
 from app.schemas import AssetType, Currency, NormalizedHolding
 from app.services.fx_book import apply_inr_book, book_value_inr, sum_inr_market
 
@@ -75,9 +76,19 @@ def apply_book_quality_pass(holdings: list[NormalizedHolding]) -> tuple[list[Nor
 
 
 def log_reconciliation_summary(holdings: list[NormalizedHolding], total_inr: float) -> None:
+    if not settings.reconciliation_debug_logging:
+        return
     n = len(holdings)
     inc = sum(1 for h in holdings if h.book_include)
     log.info("book reconciliation: lines=%s included=%s sum_inr_book=%.2f", n, inc, total_inr)
+    by_type: dict[str, float] = {}
+    for h in holdings:
+        if not h.book_include:
+            continue
+        k = h.asset_type.value
+        by_type[k] = by_type.get(k, 0.0) + book_value_inr(h)
+    if by_type:
+        log.info("book reconciliation by asset_type (INR, included lines): %s", by_type)
 
 
 def finalize_holdings_pipeline(

@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.mcp.adapter import IndmoneyAdapter
 from app.models import MfFundCache
 from app.schemas import AssetType, MfFundSummary, NormalizedHolding
@@ -63,10 +64,14 @@ async def build_mf_lab_summaries(
     session: AsyncSession,
     adapter: IndmoneyAdapter,
     holdings: list[NormalizedHolding],
+    *,
+    max_mcp_calls: int | None = None,
 ) -> list[MfFundSummary]:
     out: list[MfFundSummary] = []
     if not adapter.tool_names:
         return out
+    cap = settings.mf_lab_max_mcp_calls if max_mcp_calls is None else max(0, max_mcp_calls)
+    mcp_calls_used = 0
     now = datetime.now(timezone.utc)
     for h in holdings:
         if h.asset_type != AssetType.MF:
@@ -83,7 +88,7 @@ async def build_mf_lab_summaries(
             continue
 
         payload: dict[str, Any] = {}
-        if "get_mf_funds_details" in adapter.tool_names:
+        if "get_mf_funds_details" in adapter.tool_names and mcp_calls_used < cap:
             arg_sets: list[dict[str, Any]] = []
             if h.isin:
                 arg_sets.append({"isin": h.isin})
@@ -91,17 +96,24 @@ async def build_mf_lab_summaries(
                 arg_sets.append({"scheme_code": h.symbol})
             arg_sets.append({"fund_name": h.name[:120]})
             for args in arg_sets:
+                if mcp_calls_used >= cap:
+                    break
                 if not args or all(v in (None, "") for v in args.values()):
                     continue
                 try:
                     raw = await adapter.client.tools_call("get_mf_funds_details", args)
-                    if isinstance(raw, dict):
-                        payload = raw
-                        break
-                    if isinstance(raw, str) and "Error" in raw:
-                        log.debug("mf details error: %s", raw[:200])
                 except Exception as e:  # noqa: BLE001
+                    mcp_calls_used += 1
                     log.debug("mf details %s: %s", args, e)
+                    continue
+                mcp_calls_used += 1
+                if isinstance(raw, dict):
+                    payload = raw
+                    break
+                if isinstance(raw, str) and "Error" in raw:
+                    log.debug("mf details error: %s", raw[:200])
+        elif "get_mf_funds_details" in adapter.tool_names and mcp_calls_used >= cap:
+            log.debug("mf_lab: MCP cap reached (%s); skipping live details for %s", cap, h.name[:80])
 
         await session.execute(delete(MfFundCache).where(MfFundCache.cache_key == key))
         session.add(
@@ -113,11 +125,12 @@ async def build_mf_lab_summaries(
         )
         out.append(_to_summary(h, _flatten(payload)))
     await session.commit()
-    out_dedup: list[MfFundSummary] = []
-    seen: set[str] = set()
+    by_hid: dict[str, MfFundSummary] = {}
     for s in out:
-        if s.holding_id in seen:
+        cur = by_hid.get(s.holding_id)
+        if cur is None:
+            by_hid[s.holding_id] = s
             continue
-        seen.add(s.holding_id)
-        out_dedup.append(s)
-    return out_dedup
+        if s.data_status == "ok" and cur.data_status != "ok":
+            by_hid[s.holding_id] = s
+    return list(by_hid.values())

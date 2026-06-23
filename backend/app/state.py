@@ -12,7 +12,7 @@ from app.config import INDMONEY_MCP_PUBLIC_URL, settings
 from app.mcp.adapter import IndmoneyAdapter
 from app.mcp.client import IndmoneyMcpClient
 from app.models import Transaction
-from app.schemas import PortfolioMeta, PortfolioResponse
+from app.schemas import McpToolSummary, PortfolioMeta, PortfolioResponse
 from app.services.broadcast import BroadcastHub
 from app.services.day_move_proxy import enrich_day_change_from_ohlc
 from app.services.holding_quality import finalize_holdings_pipeline, prepare_holdings_from_priced_rows
@@ -33,6 +33,51 @@ from app.services.price_engine import apply_prices_to_holdings
 log = logging.getLogger(__name__)
 
 
+def preserve_dropped_asset_types(
+    new_holdings: list[Any],
+    existing_db: list[Any],
+) -> list[Any]:
+    """Keep DB rows for asset classes MCP omitted (common after rate limits on reconnect)."""
+    from app.schemas import NormalizedHolding
+
+    if not new_holdings or not existing_db:
+        return new_holdings
+
+    def type_counts(rows: list[Any]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for h in rows:
+            at = h.asset_type.value if isinstance(h, NormalizedHolding) else str(h.get("asset_type") or "")
+            if at:
+                out[at] = out.get(at, 0) + 1
+        return out
+
+    new_types = type_counts(new_holdings)
+    old_types = type_counts(existing_db)
+    dropped = [t for t, n in old_types.items() if n > 0 and new_types.get(t, 0) == 0]
+    if not dropped:
+        return new_holdings
+
+    new_ids = {
+        h.id if isinstance(h, NormalizedHolding) else str(h.get("id") or "")
+        for h in new_holdings
+    }
+    preserved = [
+        h
+        for h in existing_db
+        if (h.asset_type.value if isinstance(h, NormalizedHolding) else str(h.get("asset_type") or ""))
+        in dropped
+        and (h.id if isinstance(h, NormalizedHolding) else str(h.get("id") or "")) not in new_ids
+    ]
+    if preserved:
+        log.warning(
+            "refresh_holdings: preserving %s DB rows for MCP-dropped asset types %s",
+            len(preserved),
+            dropped,
+        )
+        return list(new_holdings) + preserved
+    return new_holdings
+
+
 class AppState:
     """Process-wide portfolio cache, MCP handles, and SSE hub."""
 
@@ -43,6 +88,7 @@ class AppState:
         self.adapter = IndmoneyAdapter(self.client)
         self.effective_mcp_url: str | None = env_url
         self.tool_inventory: list[str] = []
+        self.mcp_tools: list[McpToolSummary] = []
         self.mode: str = "empty"
         self.mcp_connected: bool = False
         self.mcp_degraded: bool = False
@@ -52,6 +98,9 @@ class AppState:
         self.last_price_sync: datetime | None = None
         self.cached: PortfolioResponse | None = None
         self._lock = asyncio.Lock()
+
+    def refresh_lock_busy(self) -> bool:
+        return self._lock.locked()
 
     async def apply_mcp_endpoint_from_db(self, session: AsyncSession) -> None:
         """DB URL overrides env. Empty string in DB = user chose mock only. NULL = use env (defaults to official INDmoney URL)."""
@@ -100,6 +149,9 @@ class AppState:
             mcp_connected=self.mcp_connected,
             mcp_degraded=self.mcp_degraded,
             tool_inventory=list(self.tool_inventory),
+            mcp_tools=list(self.mcp_tools),
+            mcp_holdings_tool=self.adapter._holdings_tool,
+            mcp_transactions_tool=self.adapter._tx_tool,
             mcp_bearer_configured=self.mcp_bearer_configured,
             indmoney_oauth_connected=self.indmoney_oauth_connected,
         )
@@ -111,10 +163,12 @@ class AppState:
             self.mcp_connected = False
             self.mcp_degraded = True
             self.tool_inventory = []
+            self.mcp_tools = []
             return
         try:
             names = await self.adapter.discover()
             self.tool_inventory = names
+            self.mcp_tools = self.adapter.mcp_tool_catalog()
             self.mcp_connected = True
             self.mcp_degraded = not bool(self.adapter._holdings_tool)
             log.info(
@@ -131,6 +185,30 @@ class AppState:
             self.mcp_connected = False
             self.mcp_degraded = True
             self.tool_inventory = []
+            self.mcp_tools = []
+
+    async def clear_portfolio_book(self, session: AsyncSession) -> PortfolioResponse:
+        """Wipe holdings/transactions and reset cache (disconnect / sign-out)."""
+        async with self._lock:
+            await persist_holdings(session, [])
+            await persist_transactions_stub(session, [])
+            self.mode = "empty"
+            self.mcp_degraded = True
+            self.last_holdings_sync = None
+            self.last_price_sync = None
+            rule = await load_rules(session)
+            meta = self.meta()
+            self.cached = await assemble_portfolio_response(
+                session,
+                all_holdings=[],
+                meta_in=meta,
+                rule=rule,
+                txs_count=0,
+                mf_lab_full=[],
+                usd_inr=settings.usdinr_rate,
+            )
+            log.info("clear_portfolio_book: holdings and cache cleared")
+            return self.cached
 
     async def refresh_holdings(self, session: AsyncSession) -> PortfolioResponse:
         async with self._lock:
@@ -154,6 +232,17 @@ class AppState:
                         type(raw).__name__,
                         len(raw) if isinstance(raw, list) else "n/a",
                     )
+                    if settings.holdings_raw_preview_logging and isinstance(raw, list) and raw:
+                        for idx, sample in enumerate(raw[:3]):
+                            if isinstance(sample, dict):
+                                keys = sorted(sample.keys())
+                                at = sample.get("asset_type") or sample.get("assetType")
+                                log.info(
+                                    "holdings raw preview[%s] asset_type=%r keys=%s",
+                                    idx,
+                                    at,
+                                    keys[:60],
+                                )
                 except Exception as e:  # noqa: BLE001
                     log.exception("refresh_holdings: MCP fetch failed — using empty book (no sample fallback): %s", e)
                     self.mcp_degraded = True
@@ -181,6 +270,20 @@ class AppState:
                 usd_inr=settings.usdinr_rate,
                 fx_as_of=now,
             )
+
+            existing_db = await read_holdings_from_db(session)
+            if not holdings and existing_db and self.mcp_connected and self.mcp_bearer_configured:
+                log.warning(
+                    "refresh_holdings: MCP returned 0 normalized rows but DB has %s — keeping last good book",
+                    len(existing_db),
+                )
+                self.mcp_degraded = True
+                holdings = existing_db
+            elif holdings and existing_db and self.mcp_connected and self.mcp_bearer_configured:
+                merged = preserve_dropped_asset_types(holdings, existing_db)
+                if len(merged) > len(holdings):
+                    self.mcp_degraded = True
+                    holdings = merged
 
             if self.adapter._tx_tool and self.mcp_connected:
                 try:
@@ -290,29 +393,31 @@ class AppState:
             return self.cached
 
     async def rebuild_portfolio_cache(self, session: AsyncSession) -> PortfolioResponse:
-        """Recompute portfolio for current DB holdings and active view (no MCP fetch)."""
-        async with self._lock:
-            now = datetime.now(timezone.utc)
-            holdings = await read_holdings_from_db(session)
-            holdings = finalize_holdings_pipeline(
-                holdings,
-                usd_inr=settings.usdinr_rate,
-                fx_as_of=now,
-            )
-            rule = await load_rules(session)
-            meta = self.meta()
-            tx_count = int((await session.execute(select(func.count()).select_from(Transaction))).scalar_one() or 0)
-            prev_mf = list(self.cached.mf_lab) if self.cached else []
-            self.cached = await assemble_portfolio_response(
-                session,
-                all_holdings=holdings,
-                meta_in=meta,
-                rule=rule,
-                txs_count=tx_count,
-                mf_lab_full=prev_mf,
-                usd_inr=settings.usdinr_rate,
-            )
-            return self.cached
+        """Recompute portfolio for current DB holdings and active view (no MCP fetch).
+
+        Intentionally does **not** take ``_lock`` so UI reads are not blocked by in-flight MCP sync.
+        """
+        now = datetime.now(timezone.utc)
+        holdings = await read_holdings_from_db(session)
+        holdings = finalize_holdings_pipeline(
+            holdings,
+            usd_inr=settings.usdinr_rate,
+            fx_as_of=now,
+        )
+        rule = await load_rules(session)
+        meta = self.meta()
+        tx_count = int((await session.execute(select(func.count()).select_from(Transaction))).scalar_one() or 0)
+        prev_mf = list(self.cached.mf_lab) if self.cached else []
+        self.cached = await assemble_portfolio_response(
+            session,
+            all_holdings=holdings,
+            meta_in=meta,
+            rule=rule,
+            txs_count=tx_count,
+            mf_lab_full=prev_mf,
+            usd_inr=settings.usdinr_rate,
+        )
+        return self.cached
 
 
 state = AppState()

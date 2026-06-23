@@ -37,7 +37,7 @@ export function HeroCards({ totals }: { totals: PortfolioTotals }) {
         definition="Sum of per-line unrealized P&amp;L converted to INR for USD positions using the same static USDINR as market value."
         source="avg_cost × qty vs MV, then INR book layer."
       >
-        <p className="mt-2 text-xs text-mintglass/90">INR book — totals reconcile in one base currency.</p>
+        <p className="mt-2 text-xs text-mintglass/90">INR book: totals reconcile in one base currency.</p>
       </MetricTip>
     </section>
   );

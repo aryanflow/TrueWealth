@@ -37,7 +37,11 @@ export function McpConnectionStepper({ initialUrl, meta, onDone }: Props) {
   const step3Active = meta.mode === "live" && meta.mcp_connected && !meta.mcp_degraded;
 
   function startIndmoneyOAuth(scope: string) {
-    const rb = encodeURIComponent(`${window.location.origin}/`);
+    const path =
+      typeof window !== "undefined" && window.location.pathname && window.location.pathname !== "/"
+        ? window.location.pathname
+        : "/today";
+    const rb = encodeURIComponent(`${window.location.origin}${path}`);
     const sc = encodeURIComponent(scope);
     window.location.assign(`/api/indmoney/auth/start?scope=${sc}&return_base=${rb}`);
   }
@@ -57,14 +61,9 @@ export function McpConnectionStepper({ initialUrl, meta, onDone }: Props) {
     };
     if (!r.ok) throw new Error(formatDetail(j.detail));
     if (j.mcp_connected && !j.mcp_degraded) {
-      const toolNote =
-        (j.tool_inventory?.length ?? 0) > 0 ? ` ${j.tool_inventory!.length} tools listed.` : "";
-      setMsg(`Connected. Discovery OK. Book mode: ${j.mode ?? "unknown"}.${toolNote}`.trim());
+      setMsg(`Connected. Discovery OK. Book mode: ${j.mode ?? "unknown"}.`.trim());
     } else if (j.mcp_connected && j.mcp_degraded) {
-      const hint = (j.tool_inventory ?? []).slice(0, 6).join(", ") || "none";
-      setMsg(
-        `MCP responded but no holdings-like tool matched (sample tools: ${hint}). Check backend logs or tool names from INDmoney.`,
-      );
+      setMsg("MCP responded but no holdings-like tool matched. Check Advanced for tool names or backend logs.");
     } else {
       setMsg(
         "INDmoney did not accept this client (typical: 401 without a valid token). The UI may stay on mock sample data. Try Save token & connect after you have a Bearer string, or use a proxy URL.",
@@ -91,9 +90,7 @@ export function McpConnectionStepper({ initialUrl, meta, onDone }: Props) {
     } catch (er) {
       const m = er instanceof Error ? er.message : "Failed";
       if (m === "Failed to fetch" || m.includes("NetworkError")) {
-        setMsg(
-          "Cannot reach the API. Start FastAPI on 127.0.0.1:8000 and use Next on :3000 (rewrites /api to the backend).",
-        );
+        setMsg("Cannot reach the True Wealth API from this page.");
       } else {
         setMsg(m);
       }

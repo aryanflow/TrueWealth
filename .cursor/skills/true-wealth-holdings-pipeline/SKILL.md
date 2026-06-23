@@ -29,15 +29,18 @@ description: >-
    If MCP populates INR book fields (`market_value_inr`, `inr_market_value`, … — see `_broker_reported_inr` in normalizer), `apply_inr_book` must use that as `inr_market_value` and **not** multiply native USD MV by FX again.
 
 3. **Stable identity**  
-   Prefer `ind_key` / `instrument_id` (+ `account_id` when present); fallback `isin`+account, then symbol+exchange+account; avoid deduping by name. `normalize_payload` dedupes by `id`, keeping the row with larger `|market_value| + |inr_market_value|`.
+   Prefer `ind_key` / `instrument_id` (+ `account_id` when present); fallback `isin`+account, then symbol+exchange+account; avoid deduping by **ISIN alone** (same scheme can appear in multiple folios). `normalize_payload` and `dedupe_holdings_by_instrument` dedupe by **normalized line `id`**, keeping the row with larger `|market_value| + |inr_market_value|` when the same `id` appears twice.
 
 4. **LTP field order**  
    Prefer `ltp`, `last_traded_price`, `lastPrice` before `close` so US lines do not pick a wrong “close” field as share price.
 
-5. **Pipeline**  
+5. **US position value vs per-share `market_value`**  
+   For `US_STOCK`, prefer `current_value` (and similar) **before** `market_value` — INDmoney sometimes repeats per-share LTP in `market_value`. If that echo is detected, native MV falls back to `quantity * ltp` (USD notional). **INDmoney may quote last price in INR per share** (e.g. ~20k–65k); when `ltp ≥ 12_000` and `ltp/USDINR` is a plausible USD tick (≤ ~4k), normalize LTP to USD before MV resolution; if broker MV is still wildly above `qty ×` USD LTP, clamp MV to that notional. EPF/FD-style rows: same `ind_key` across accounts must include **name** (and account) in the stable line `id` so dedupe does not halve totals.
+
+6. **Pipeline**  
    After priced dicts: `prepare_holdings_from_priced_rows` (validate → reconcile LTP vs MV → `apply_inr_book` → absurd-USD exclusion). DB-only recompute: `finalize_holdings_pipeline` on `read_holdings_from_db` results (`rebuild_portfolio_cache`).
 
-6. **Totals**  
+7. **Totals**  
    Aggregations use `book_value_inr` / `sum_inr_market`; excluded lines have `book_include=False` and must not inflate totals; surface counts via `DataCompleteness` / UI banner.
 
 ## MCP source

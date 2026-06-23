@@ -47,9 +47,9 @@ class Settings(BaseSettings):
         description="INDmoney MCP OAuth issuer (authorization server metadata host).",
     )
     frontend_oauth_success_url: str = Field(
-        default="http://localhost:3000/",
+        default="http://localhost:3000/today",
         alias="FRONTEND_OAUTH_SUCCESS_URL",
-        description="Browser redirect after OAuth callback (Next dev default; query indmoney_oauth=ok|error). Set to http://127.0.0.1:3000/ if you open the UI that way.",
+        description="Browser redirect after OAuth callback (path should match your Next app, e.g. /today).",
     )
     indmoney_oauth_client_name: str = Field(
         default="True Wealth",
@@ -62,8 +62,29 @@ class Settings(BaseSettings):
     holdings_refresh_sec: int = 120
     alerts_refresh_sec: int = 60
     heartbeat_sec: int = 15
-    usdinr_rate: float = Field(default=83.0, alias="USDINR_RATE", description="Static USD/INR spot for converting US book to INR (MVP).")
+    usdinr_rate: float = Field(
+        default=94.61,
+        alias="USDINR_RATE",
+        description="Static USD/INR spot for converting US book to INR when broker INR book is absent (override via env).",
+    )
     ohlc_enrich_max: int = Field(default=5, alias="OHLC_ENRICH_MAX", ge=0, le=30, description="Max MCP OHLC calls per price refresh for day-move proxy.")
+    mf_lab_max_mcp_calls: int = Field(
+        default=8,
+        alias="MF_LAB_MAX_MCP_CALLS",
+        ge=0,
+        le=50,
+        description="Cap MCP get_mf_funds_details calls per holdings refresh so the book and /api/portfolio stay responsive.",
+    )
+    reconciliation_debug_logging: bool = Field(
+        default=False,
+        alias="TW_RECONCILIATION_DEBUG",
+        description="When true, emit extra reconciliation summary logs (book lines, INR sum). Off by default.",
+    )
+    holdings_raw_preview_logging: bool = Field(
+        default=False,
+        alias="TW_HOLDINGS_RAW_PREVIEW",
+        description="Log first MCP row key names (no values) after holdings fetch — for mapping issues.",
+    )
 
     @property
     def cors_origins_list(self) -> List[str]:

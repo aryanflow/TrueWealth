@@ -27,7 +27,7 @@ function OauthReturnBanner() {
       {ok ? (
         <p>
           <strong>INDmoney connected.</strong> The API stored tokens and ran discovery.{" "}
-          <Link href="/" className="font-medium text-ion underline underline-offset-2 hover:text-ion/80">
+          <Link href="/today" className="font-medium text-ion underline underline-offset-2 hover:text-ion/80">
             Open dashboard
           </Link>{" "}
           to see live holdings (use <span className="font-mono text-xs">Save token & connect</span> if the MCP URL was cleared).
@@ -206,7 +206,7 @@ export default function McpLandingPage() {
                 View tool catalog
               </button>
               <Link
-                href="/"
+                href="/today"
                 className="inline-flex items-center justify-center rounded-xl border border-white/10 px-5 py-3 text-sm text-muted transition hover:border-ion/30 hover:text-ink"
               >
                 Open dashboard
@@ -391,7 +391,7 @@ export default function McpLandingPage() {
               <a href="#mcp-tools" className="hover:text-ink">
                 Tool reference
               </a>
-              <Link href="/" className="hover:text-ink">
+              <Link href="/today" className="hover:text-ink">
                 Dashboard
               </Link>
               <a href="https://www.indmoney.com/mcp" className="hover:text-ink" target="_blank" rel="noreferrer">

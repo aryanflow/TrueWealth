@@ -79,7 +79,7 @@ export function WealthHero({
             {performance.max_drawdown_pct != null ? (
               <span className="ml-3 font-mono text-ink/85">Max DD: {performance.max_drawdown_pct.toFixed(2)}%</span>
             ) : null}
-            <span className="ml-3 text-xs text-muted/90">XIRR: {performance?.xirr_status ?? "—"}</span>
+            <span className="ml-3 text-xs text-muted/90">XIRR: {performance?.xirr_status ?? "n/a"}</span>
           </p>
         ) : null}
         <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">

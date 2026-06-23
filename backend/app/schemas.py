@@ -129,6 +129,10 @@ class DataCompleteness(BaseModel):
     transactions_available: bool = False
     ohlc_coverage_pct: float = 0.0
     excluded_suspicious_price_count: int = 0
+    invalid_price_count: int = Field(
+        default=0,
+        description="Alias for UI: same as excluded_suspicious_price_count (invalid native price mapping).",
+    )
     excluded_suspicious_price_hint: str = ""
 
 
@@ -179,6 +183,13 @@ class MfFundSummary(BaseModel):
     data_status: str = "pending"
 
 
+class McpToolSummary(BaseModel):
+    """One entry from MCP ``tools/list`` (INDmoney server catalog)."""
+
+    name: str
+    description: Optional[str] = None
+
+
 class PortfolioMeta(BaseModel):
     last_holdings_sync: Optional[datetime] = None
     last_price_sync: Optional[datetime] = None
@@ -187,6 +198,18 @@ class PortfolioMeta(BaseModel):
     mcp_connected: bool = False
     mcp_degraded: bool = False
     tool_inventory: List[str] = Field(default_factory=list)
+    mcp_tools: List[McpToolSummary] = Field(
+        default_factory=list,
+        description="INDmoney MCP tools/list entries (name + description) after last discovery.",
+    )
+    mcp_holdings_tool: Optional[str] = Field(
+        default=None,
+        description="Tool name selected for portfolio fetch (keyword heuristic).",
+    )
+    mcp_transactions_tool: Optional[str] = Field(
+        default=None,
+        description="Tool name selected for transactions, if any.",
+    )
     mcp_bearer_configured: bool = False
     indmoney_oauth_connected: bool = False
     base_currency: str = "INR"
@@ -199,6 +222,32 @@ class PortfolioMeta(BaseModel):
     coverage: PortfolioCoverage = Field(default_factory=PortfolioCoverage)
     history_matches_view: bool = True
     last_snapshot_at: Optional[datetime] = None
+    """Today tab badge: good, partial, or degraded. See derive_data_confidence in portfolio_service."""
+    confidence: str = "partial"
+    """Latest refresh_log row with status error (holdings or prices), truncated. Not for primary UI."""
+    last_error: Optional[str] = None
+    confidence_notes: List[str] = Field(
+        default_factory=list,
+        description="Short human-readable reasons for partial/degraded confidence (tooltips, Shield).",
+    )
+
+
+class PortfolioStatus(BaseModel):
+    """Lightweight connection and quality snapshot for Settings without full portfolio."""
+
+    confidence: str = "partial"
+    mcp_connected: bool = False
+    mcp_degraded: bool = False
+    indmoney_oauth_connected: bool = False
+    mode: str = "mock"
+    last_holdings_sync: Optional[datetime] = None
+    last_price_sync: Optional[datetime] = None
+    stale_data: bool = False
+    missing_cost_basis_count: int = 0
+    invalid_price_count: int = 0
+    fx_mode: str = "static"
+    last_error: Optional[str] = None
+    mcp_endpoint: Optional[str] = None
 
 
 class PortfolioHistoryPoint(BaseModel):
@@ -217,6 +266,21 @@ class PortfolioResponse(BaseModel):
     performance: PortfolioPerformance = Field(default_factory=PortfolioPerformance)
     mf_lab: List[MfFundSummary] = Field(default_factory=list)
     history: List[Dict[str, Any]] = Field(default_factory=list)
+    usd_exposure_pct: float = Field(
+        0.0,
+        description=(
+            "USD-denominated lines only: sum of INR book where native `currency` is USD, as % of total INR book. "
+            "Indian-listed stocks are INR in the model and do not increase this figure."
+        ),
+    )
+    global_equity_offshore_pct: float = Field(
+        0.0,
+        description="US/global listed equity (`US_STOCK`) as % of INR book — distinct from USD currency leg above.",
+    )
+    allocation_full_book: Optional[PortfolioAllocation] = Field(
+        default=None,
+        description="When the active view excludes sleeves, full-book allocation for Map/Today comparison.",
+    )
 
 
 class RulesUpdate(BaseModel):
@@ -240,6 +304,9 @@ class McpConnectResponse(BaseModel):
     mcp_connected: bool = False
     mcp_degraded: bool = False
     tool_inventory: List[str] = Field(default_factory=list)
+    mcp_tools: List[McpToolSummary] = Field(default_factory=list)
+    mcp_holdings_tool: Optional[str] = None
+    mcp_transactions_tool: Optional[str] = None
     mode: str = "mock"
 
 

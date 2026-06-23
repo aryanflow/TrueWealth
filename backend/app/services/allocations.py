@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from app.schemas import AllocationSlice, NormalizedHolding
-from app.services.fx_book import book_value_inr
+from app.services.fx_book import book_value_inr, sum_inr_market
 
 
 def _bucket_totals(holdings: list[NormalizedHolding], key_fn) -> dict[str, float]:
@@ -16,7 +16,8 @@ def _bucket_totals(holdings: list[NormalizedHolding], key_fn) -> dict[str, float
 
 
 def build_allocations(holdings: list[NormalizedHolding]) -> tuple[list[AllocationSlice], list[AllocationSlice], list[AllocationSlice]]:
-    total = sum(float(h.market_value or 0) for h in holdings) or 1.0
+    # Must match bucket numerators (INR book values), not raw native `market_value` (e.g. USD lines).
+    total = sum_inr_market(holdings) or 1.0
 
     def slices(totals: dict[str, float]) -> list[AllocationSlice]:
         items = sorted(totals.items(), key=lambda x: -x[1])

@@ -17,7 +17,8 @@ import {
 } from "recharts";
 
 import { formatInr } from "@/lib/format";
-import type { HistoryPoint, NormalizedHolding, PortfolioMeta } from "@/lib/types";
+import { CHART_LADDER, CHART_STACK_COLORS } from "@/lib/chartColors";
+import type { HistoryPoint, NormalizedHolding, PortfolioAlerts, PortfolioMeta } from "@/lib/types";
 
 function bookInr(h: NormalizedHolding): number {
   const v = h.inr_market_value;
@@ -34,6 +35,23 @@ function drawdownSeries(history: HistoryPoint[]): { date: string; dd: number; va
     const dd = peak > 0 ? ((v - peak) / peak) * 100 : 0;
     return { date: h.snapshot_date, dd, value: v };
   });
+}
+
+function navVarianceTooLow(values: number[]): boolean {
+  if (values.length < 3) return true;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  if (mean <= 0) return true;
+  const rel = (max - min) / mean;
+  return rel < 0.0018;
+}
+
+function drawdownSwingTooLow(dds: number[]): boolean {
+  if (dds.length < 3) return true;
+  const min = Math.min(...dds);
+  const max = Math.max(...dds);
+  return max - min < 0.05;
 }
 
 function fmtSnap(iso: string | null | undefined): string {
@@ -53,6 +71,7 @@ export function DecisionCharts({
   totalInrActive,
   highlightHoldingId,
   onSelectHolding,
+  alerts,
 }: {
   history: HistoryPoint[];
   holdings: NormalizedHolding[];
@@ -61,6 +80,7 @@ export function DecisionCharts({
   totalInrActive: number;
   highlightHoldingId: string | null;
   onSelectHolding: (id: string) => void;
+  alerts?: PortfolioAlerts | null;
 }) {
   const wealth = history.map((h) => ({ date: h.snapshot_date, value: h.inr_market_value }));
   const ddData = drawdownSeries(history);
@@ -70,14 +90,23 @@ export function DecisionCharts({
     .slice(0, 14)
     .map((h) => ({
       id: h.id,
-      name: h.name.length > 22 ? `${h.name.slice(0, 20)}…` : h.name,
       fullName: h.name,
       w: h.weight,
       over: h.weight >= thresholdPct,
       inr: bookInr(h),
     }));
 
-  const emptyHistory = wealth.length < 2;
+  const ladderYAxisWidth = ladder.length
+    ? Math.min(200, Math.max(104, Math.round(Math.max(...ladder.map((r) => r.fullName.length))) * 5.4))
+    : 100;
+
+  const maxLadderW = ladder.length ? Math.max(...ladder.map((r) => r.w), thresholdPct) : thresholdPct;
+  const ladderXMax = Math.max(thresholdPct + 5, maxLadderW + 5, 100);
+
+  const wealthVals = wealth.map((w) => w.value);
+  const wealthFlat = navVarianceTooLow(wealthVals);
+  const ddFlat = drawdownSwingTooLow(ddData.map((d) => d.dd));
+  const emptyHistory = wealth.length < 3 || wealthFlat;
   const snapHint = meta.last_snapshot_at ? `Last snapshot: ${fmtSnap(meta.last_snapshot_at)}.` : "";
   const viewHint =
     meta.history_matches_view === false
@@ -89,10 +118,14 @@ export function DecisionCharts({
       <div className="rounded-xl border border-line bg-surface/60 p-4 shadow-card">
         <h3 className="font-display text-lg text-ink">Wealth (INR)</h3>
         <p className="mt-1 text-xs text-muted">Active view · snapshot NAV</p>
-        <div className="mt-3 h-52">
+        <div className={`mt-3 ${emptyHistory ? "min-h-0 py-2" : "h-52"}`}>
           {emptyHistory ? (
             <div className="text-sm text-muted">
-              <p>Keep True Wealth running for about 48 hours to build snapshot history.</p>
+              <p>
+                {wealth.length < 3
+                  ? "We need at least three daily snapshots in this view before the wealth line is meaningful."
+                  : "NAV moves between snapshots are tiny versus book size—the line would read as flat noise. Check back after more divergence."}
+              </p>
               {snapHint ? <p className="mt-2 text-xs text-muted/90">{snapHint}</p> : null}
               {viewHint ? <p className="mt-2 text-xs text-ember/80">{viewHint}</p> : null}
             </div>
@@ -120,10 +153,14 @@ export function DecisionCharts({
       <div className="rounded-xl border border-line bg-surface/60 p-4 shadow-card">
         <h3 className="font-display text-lg text-ink">Drawdown</h3>
         <p className="mt-1 text-xs text-muted">Peak-to-trough on snapshot NAV</p>
-        <div className="mt-3 h-52">
-          {ddData.length < 2 ? (
+        <div className={`mt-3 ${ddData.length < 3 || ddFlat ? "min-h-0 py-2" : "h-52"}`}>
+          {ddData.length < 3 || ddFlat ? (
             <div className="text-sm text-muted">
-              <p>Not enough history for a drawdown curve yet.</p>
+              <p>
+                {ddData.length < 3
+                  ? "Drawdown needs at least three snapshots so peak-to-trough is not a flat line."
+                  : "Drawdown range is smaller than snapshot noise—chart hidden until swings are larger."}
+              </p>
               {snapHint ? <p className="mt-2 text-xs text-muted/90">{snapHint}</p> : null}
             </div>
           ) : (
@@ -154,19 +191,38 @@ export function DecisionCharts({
             <ResponsiveContainer width="100%" height="100%">
               <BarChart layout="vertical" data={ladder} margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a2233" opacity={0.4} />
-                <XAxis type="number" domain={[0, "auto"]} tick={{ fill: "#7a869a", fontSize: 10 }} unit="%" />
-                <YAxis type="category" dataKey="name" width={100} tick={{ fill: "#9aa7b8", fontSize: 9 }} />
+                <XAxis type="number" domain={[0, ladderXMax]} tick={{ fill: "#7a869a", fontSize: 10 }} unit="%" />
+                <YAxis
+                  type="category"
+                  dataKey="fullName"
+                  width={ladderYAxisWidth}
+                  interval={0}
+                  tick={(props: { x?: number; y?: number; payload?: { value?: string } }) => {
+                    const x = props.x ?? 0;
+                    const y = props.y ?? 0;
+                    const raw = props.payload?.value ?? "";
+                    const t = raw.length > 28 ? `${raw.slice(0, 26)}…` : raw;
+                    return (
+                      <text x={x - 4} y={y} dy="0.33em" textAnchor="end" fill="#9aa7b8" fontSize={8.5}>
+                        <title>{raw}</title>
+                        {t}
+                      </text>
+                    );
+                  }}
+                />
                 <Tooltip
                   content={({ active, payload }) => {
                     if (!active || !payload?.length) return null;
                     const d = payload[0].payload as (typeof ladder)[0];
                     const tgt = thresholdPct;
                     const trim = Math.max(0, d.inr - (tgt / 100) * totalInrActive);
+                    const concRow = alerts?.concentration?.find((c) => c.holding_id === d.id);
+                    const dilute = concRow?.suggested_dilute_inr;
                     return (
                       <div className="rounded-md border border-line bg-[#0B1220] px-3 py-2 text-xs text-ink shadow-lg">
                         <p className="font-medium text-ink">{d.fullName}</p>
                         <p className="mt-1 text-muted">
-                          Weight <span className="font-mono text-ink">{d.w.toFixed(2)}%</span>
+                          Weight <span className="font-mono text-ink">{d.w.toFixed(1)}%</span>
                         </p>
                         <p className="text-muted">
                           Value <span className="font-mono text-mintglass/90">{formatInr(d.inr)}</span>
@@ -177,11 +233,21 @@ export function DecisionCharts({
                         <p className="text-muted">
                           Trim (indicative) <span className="font-mono text-ember/90">{formatInr(trim)}</span>
                         </p>
+                        {dilute != null && dilute > 0 ? (
+                          <p className="text-muted">
+                            Dilute (indicative) <span className="font-mono text-ion/90">{formatInr(dilute)}</span>
+                          </p>
+                        ) : null}
                       </div>
                     );
                   }}
                 />
-                <ReferenceLine x={thresholdPct} stroke="#FFCC66" strokeDasharray="4 4" />
+                <ReferenceLine
+                  x={thresholdPct}
+                  stroke="#FFCC66"
+                  strokeDasharray="4 4"
+                  label={{ value: `${thresholdPct}% guard`, fill: "#c9a85a", fontSize: 10, position: "insideTopRight" }}
+                />
                 <Bar
                   dataKey="w"
                   radius={[0, 4, 4, 0]}
@@ -193,7 +259,13 @@ export function DecisionCharts({
                   {ladder.map((e, i) => (
                     <Cell
                       key={e.id}
-                      fill={e.id === highlightHoldingId ? "#6EA8FF" : e.over ? "#c45a6b" : "#68D7C6"}
+                      fill={
+                        e.id === highlightHoldingId
+                          ? CHART_LADDER.highlight
+                          : e.over
+                            ? CHART_LADDER.over
+                            : CHART_STACK_COLORS[i % CHART_STACK_COLORS.length]
+                      }
                       className="cursor-pointer"
                     />
                   ))}

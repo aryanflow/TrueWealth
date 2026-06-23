@@ -3,7 +3,8 @@
 import type { PortfolioResponse } from "@/lib/types";
 
 export function RiskStrip({ data }: { data: PortfolioResponse }) {
-  const usd = data.allocation.by_currency.find((s) => s.key === "USD")?.pct ?? 0;
+  const usd = data.usd_exposure_pct ?? data.allocation.by_currency.find((s) => s.key === "USD")?.pct ?? 0;
+  const offshore = data.global_equity_offshore_pct ?? 0;
   const conc = data.alerts.concentration[0];
   const mfN = data.mf_lab.length;
   const topSector = data.holdings
@@ -16,7 +17,8 @@ export function RiskStrip({ data }: { data: PortfolioResponse }) {
       <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-muted">Risk strip</p>
       <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 text-xs text-muted">
         <span>
-          USD leg (INR book %): <strong className="font-mono text-ink">{usd.toFixed(1)}%</strong>
+          USD currency book: <strong className="font-mono text-ink">{usd.toFixed(1)}%</strong> · US equity (INR book):{" "}
+          <strong className="font-mono text-ink">{offshore.toFixed(1)}%</strong>
         </span>
         {conc ? (
           <span>

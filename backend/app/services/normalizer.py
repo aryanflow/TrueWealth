@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.config import settings
 from app.schemas import AssetType, Country, Currency, NormalizedHolding
+from app.services.fx_book import dedupe_holdings_by_instrument
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +61,123 @@ def _to_float(v: Any) -> float | None:
         return None
 
 
+def _us_stock_ltp_inr_hint_to_usd(ltp: float) -> float:
+    """INDmoney often quotes US names in INR per share while ``asset_type`` is US_STOCK.
+
+    Values like ~19_893 (NVDA) or ~65_000 (VOO) are INR; dividing by USDINR yields a plausible
+    USD last. Very high USD tickers (e.g. BRK.A) stay unchanged: ``ltp/rate`` would exceed the
+    converted band.
+    """
+    rate = float(settings.usdinr_rate or 94.61)
+    if rate <= 0 or ltp < 12_000:
+        return ltp
+    usd = ltp / rate
+    if 0.01 <= usd <= 4_000:
+        return usd
+    return ltp
+
+
+# INDmoney often uses one generic ``ind_key`` for every row of a sleeve (e.g. all EPF accounts).
+_MULTI_ACCOUNT_EXPLICIT_TYPES = frozenset(
+    {
+        "EPF",
+        "FD",
+        "NPS",
+        "PPF",
+        "SA",
+        "RD",
+        "INSURANCE",
+        "BOND",
+        "RE",
+        "VEHICLE",
+        "AIF",
+        "PMS",
+    }
+)
+
+
+def _resolve_raw_market_value(
+    row: dict[str, Any],
+    *,
+    explicit_upper: str,
+    qty: float,
+    ltp: float | None,
+    bal: float | None,
+) -> float:
+    """Native market value in row currency.
+
+    US stocks: prefer explicit position-size fields before ``market_value`` — INDmoney sometimes
+    repeats per-share ``ltp`` in ``market_value``, which would inflate fractional positions. If only
+    that echo is present, fall back to ``quantity * ltp`` (position notional in USD).
+    """
+    if explicit_upper == "US_STOCK":
+        mval = _to_float(
+            _pick(
+                row,
+                "current_value",
+                "current_market_value",
+                "current_market_value_usd",
+                "holding_current_value",
+                "holding_value",
+                "position_value",
+                "position_current_value",
+                "portfolio_value",
+                "market_value",
+                "mkt_value",
+                "corpus",
+                "total_value",
+                "value",
+            )
+        )
+    else:
+        mval = _to_float(
+            _pick(
+                row,
+                "market_value",
+                "current_value",
+                "mkt_value",
+                "corpus",
+                "total_value",
+                "holding_value",
+                "portfolio_value",
+                "value",
+            )
+        )
+    if mval is None and ltp is not None:
+        mval = qty * float(ltp)
+    mval_f = float(mval or 0.0)
+
+    if explicit_upper == "US_STOCK" and qty > 0 and ltp is not None:
+        lp = float(ltp)
+        if lp > 1e-12 and mval_f > 0:
+            notional = float(qty) * lp
+            # ``market_value`` duplicated last price (per share) while qty is fractional shares.
+            rel_mv_lp = abs(mval_f - lp) / lp
+            if rel_mv_lp < 0.025 and abs(notional - mval_f) / max(mval_f, 1e-9) > 0.05:
+                mval_f = notional
+            # Broker ``market_value`` can be INR-scale or wrong while LTP is already USD — trust qty×LTP.
+            if notional > 1e-8 and mval_f > notional * 4.0 + 1.0:
+                mval_f = notional
+
+    if mval_f <= 0 and bal is not None and bal > 0 and qty <= 0:
+        mval_f = float(bal)
+    return mval_f
+
+
+def _json_field_name(k: object) -> str:
+    """Normalize JSON keys so ``currentValueInr`` matches ``current_value_inr``."""
+    s = str(k).strip()
+    if not s:
+        return ""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", s).replace("-", "_").lower()
+
+
 def _broker_reported_inr(row: dict[str, Any]) -> float | None:
-    """INDmoney often sends a separate INR book figure for US lines; prefer this over FX on native MV."""
+    """INDmoney often sends a separate INR book figure for US/global lines; prefer over FX on native MV.
+
+    Keys are matched case-insensitively and across common camelCase variants.
+    """
+    inv = {_json_field_name(k): v for k, v in row.items() if isinstance(k, str)}
     keys = (
         "inr_market_value",
         "market_value_inr",
@@ -69,43 +187,31 @@ def _broker_reported_inr(row: dict[str, Any]) -> float | None:
         "mval_inr",
         "portfolio_value_inr",
         "amount_inr",
-        "valueInInr",
         "converted_value_inr",
         "indian_value",
         "holding_value_inr",
-        "marketValueInInr",
+        "market_value_in_inr",
+        "total_value_inr",
+        "current_market_value_inr",
+        "position_value_inr",
     )
-    for k in keys:
-        v = _to_float(row.get(k))
+    for want in keys:
+        v = _to_float(inv.get(want))
         if v is not None and v > 0:
             return v
     return None
-
-
-def _dedupe_holdings(items: list[NormalizedHolding]) -> list[NormalizedHolding]:
-    """Same stable id twice: keep the row with the larger reported native + INR magnitudes (likely richer payload)."""
-    best: dict[str, NormalizedHolding] = {}
-    for h in items:
-        cur = best.get(h.id)
-        if cur is None:
-            best[h.id] = h
-            continue
-
-        def _score(x: NormalizedHolding) -> float:
-            return abs(float(x.market_value or 0.0)) + abs(float(x.inr_market_value or 0.0))
-
-        if _score(h) > _score(cur):
-            best[h.id] = h
-    return list(best.values())
 
 
 _ASSET_HINTS = (
     (AssetType.CASH, ("cash", "liquid", "savings", "bank")),
     (AssetType.MF, ("mutual", "mf", "sip", "fund")),
     (AssetType.ETF, ("etf", "exchange traded")),
-    (AssetType.IN_STOCK, ("eq", "equity", "stock", "nse", "bse", "share")),
-    (AssetType.US_STOCK, ("us stock", "nasdaq", "nyse", "us_equity")),
+    # Fixed-income / retirement before equity text: employer names often contain "share"/"equity".
     (AssetType.EPF, ("epf", "provident")),
+    (AssetType.PPF, ("ppf", "public provident")),
+    (AssetType.NPS, ("national pension", "nps")),
+    (AssetType.IN_STOCK, ("equity", "stock", "nse", "bse", "share")),
+    (AssetType.US_STOCK, ("us stock", "nasdaq", "nyse", "us_equity")),
     (AssetType.CRYPTO, ("crypto", "bitcoin", "ethereum")),
     (AssetType.FD, (" fixed deposit", "fd ", " term deposit")),
     (AssetType.GOLD, ("gold", "sovereign gold", "sgb", "bullion")),
@@ -208,6 +314,9 @@ def classify_holding(row: dict[str, Any], text_blob: str) -> tuple[AssetType, Co
         cur = Currency.INR
     if at == AssetType.MF and cc == Country.OTHER:
         cc, cur = Country.IN, Currency.INR
+    # US listings: canonical USD native leg for allocation / FX buckets
+    if at == AssetType.US_STOCK:
+        cc, cur = Country.US, Currency.USD
     return at, cc, cur, asset_class_l2
 
 
@@ -222,7 +331,14 @@ def normalize_raw_holding(row: dict[str, Any], *, now: datetime | None = None) -
     isin = _pick(row, "isin", "ISIN")
     isin = str(isin) if isin is not None else None
 
-    qty = _to_float(_pick(row, "quantity", "qty", "units", "shares", "balance", "total_units")) or 0.0
+    # Do not map `balance` to quantity except crypto (some feeds only expose coin size as balance).
+    explicit_pre = str(_pick(row, "asset_type", "assetType") or "").upper().replace(" ", "_").replace("-", "_")
+    # INDmoney often sends a generic `quantity` (e.g. 1) for MFs while `total_units` / `units` hold scheme units.
+    qty_keys: tuple[str, ...] = ("total_units", "units", "shares", "no_of_shares", "quantity", "qty")
+    if explicit_pre == "CRYPTO":
+        qty_keys = qty_keys + ("balance", "available_balance")
+    qty = _to_float(_pick(row, *qty_keys)) or 0.0
+    bal = None if explicit_pre == "CRYPTO" else _to_float(_pick(row, "balance", "available_balance"))
     avg = _to_float(_pick(row, "avg_cost", "average_price", "avgPrice", "avg_buy_price", "buy_avg"))
     ltp = _to_float(
         _pick(
@@ -238,11 +354,24 @@ def normalize_raw_holding(row: dict[str, Any], *, now: datetime | None = None) -
             "close",
         )
     )
-    inv_amt = _to_float(_pick(row, "invested_amount", "invested_value", "cost", "total_cost"))
-    mval = _to_float(_pick(row, "market_value", "current_value", "value", "mkt_value"))
-    if mval is None and ltp is not None:
-        mval = qty * ltp
-    mval = mval or 0.0
+    if explicit_pre == "US_STOCK" and ltp is not None:
+        ltp = _us_stock_ltp_inr_hint_to_usd(float(ltp))
+    inv_amt = _to_float(
+        _pick(
+            row,
+            "invested_amount",
+            "invested_value",
+            "investment_amount",
+            "amount_invested",
+            "total_invested",
+            "purchase_value",
+            "total_cost",
+            "cost",
+            "principal",
+            # Omit `book_value` — feeds often use it for current book / NAV aggregate, not cost basis.
+        )
+    )
+    mval = _resolve_raw_market_value(row, explicit_upper=explicit_pre, qty=qty, ltp=ltp, bal=bal)
     if avg is None and inv_amt is not None and qty > 0:
         avg = inv_amt / qty
 
@@ -263,9 +392,18 @@ def normalize_raw_holding(row: dict[str, Any], *, now: datetime | None = None) -
     exch = str(_pick(row, "exchange", "segment", "listing_exchange") or "").strip()
     ind_key = _pick(row, "ind_key", "indKey", "instrument_key", "instrumentKey", "instrument_id", "instrumentId")
     hid = str(_pick(row, "id", "holding_id", "position_id") or "").strip()
+    name_key = (name or "").strip().lower()[:160]
     if ind_key is not None and str(ind_key).strip():
         ik = str(ind_key).strip()
-        hid = _stable_id([ik, acc]) if acc else (ik[:128] if len(ik) <= 128 else _stable_id([ik]))
+        if explicit_pre in _MULTI_ACCOUNT_EXPLICIT_TYPES:
+            # Same ``ind_key`` across multiple accounts (common for EPF) must not dedupe to one line.
+            hid = _stable_id([ik, acc, name_key])
+        elif acc:
+            hid = _stable_id([ik, acc])
+        elif len(ik) <= 128:
+            hid = ik
+        else:
+            hid = _stable_id([ik])
     elif not hid:
         if isin and acc:
             hid = _stable_id([isin, acc])
@@ -274,12 +412,7 @@ def normalize_raw_holding(row: dict[str, Any], *, now: datetime | None = None) -
         else:
             inv_code = str(_pick(row, "investment_code", "") or "")
             at_raw = str(explicit_at or "")
-            hpct = str(_pick(row, "holding_percent", "") or "")
-            inv_amt_s = str(inv_amt if inv_amt is not None else "")
-            mval_s = str(mval)
-            hid = _stable_id(
-                [isin or "", inv_code, symbol or "", name, str(qty), at_raw, mval_s, inv_amt_s, hpct, acc]
-            )
+            hid = _stable_id([isin or "", inv_code, symbol or "", name_key, at_raw, acc])
 
     return NormalizedHolding(
         id=hid,
@@ -331,7 +464,7 @@ def normalize_payload(payload: Any, *, now: datetime | None = None) -> list[Norm
             out.append(normalize_raw_holding(r, now=now))
     if not out and rows:
         log.warning("normalize_payload: had %s rows but produced 0 holdings (check field mapping)", len(rows))
-    return _dedupe_holdings(out)
+    return dedupe_holdings_by_instrument(out)
 
 
 def extract_transactions(payload: Any) -> list[dict[str, Any]]:

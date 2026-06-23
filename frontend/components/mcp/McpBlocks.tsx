@@ -119,6 +119,7 @@ export function McpToolCatalog() {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(DEMO_TOOLS[0]);
   const [live, setLive] = useState<string[]>([]);
+  const [liveDetail, setLiveDetail] = useState<{ name: string; description?: string | null }[]>([]);
 
   useEffect(() => {
     fetch("/api/portfolio", { cache: "no-store" })
@@ -126,6 +127,8 @@ export function McpToolCatalog() {
       .then((d) => {
         const inv = d?.meta?.tool_inventory as string[] | undefined;
         if (Array.isArray(inv)) setLive(inv);
+        const tools = d?.meta?.mcp_tools as { name: string; description?: string | null }[] | undefined;
+        if (Array.isArray(tools) && tools.length) setLiveDetail(tools);
       })
       .catch(() => {});
   }, []);
@@ -154,11 +157,21 @@ export function McpToolCatalog() {
           <h2 className="mt-2 font-display text-3xl text-ink md:text-4xl">Discoverable by design.</h2>
         </div>
         <p className="max-w-md text-sm text-muted">
-          Demo schemas below. Live tool names from your last discovery:{" "}
-          {live.length ? (
+          Demo schemas below. Live catalog from your last MCP discovery:{" "}
+          {liveDetail.length ? (
+            <span className="block pt-1 font-mono text-[11px] leading-relaxed text-mintglass/95">
+              {liveDetail.map((t) => (
+                <span key={t.name} className="mr-2 inline-block">
+                  {t.name}
+                  {t.description ? ` — ${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}` : ""}
+                  <br />
+                </span>
+              ))}
+            </span>
+          ) : live.length ? (
             <span className="font-mono text-xs text-mintglass">{live.join(", ")}</span>
           ) : (
-            <span className="text-muted">open the dashboard once to populate.</span>
+            <span className="text-muted">open the dashboard once with MCP connected to populate.</span>
           )}
         </p>
       </div>

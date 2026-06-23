@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from app.schemas import AssetType, Country, Currency, NormalizedHolding
 from app.services.allocations import build_allocations
-from app.services.normalizer import normalize_payload
+from app.services.normalizer import _broker_reported_inr, normalize_payload
 
 
 def test_normalize_indian_equity():
@@ -83,6 +83,86 @@ def test_normalize_broker_inr_field():
     assert out[0].inr_market_value == 54000.0
 
 
+def test_normalize_epf_balance_is_corpus_not_quantity():
+    """INDmoney-style EPF rows often use `balance` for INR corpus; mapping it to qty breaks cost and MV."""
+    raw = {
+        "holdings": [
+            {
+                "name": "Some Employer Pvt Ltd",
+                "asset_type": "EPF",
+                "balance": 500000.0,
+                "invested_amount": 350000.0,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    h = out[0]
+    assert h.asset_type == AssetType.EPF
+    assert h.quantity == 0.0
+    assert h.market_value == 500000.0
+    assert h.avg_cost is None
+
+
+def test_normalize_epf_explicit_type_wins_over_equity_in_name():
+    raw = {
+        "holdings": [
+            {
+                "name": "Equity Partners India Ltd",
+                "asset_type": "EPF",
+                "market_value": 120000.0,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    assert out[0].asset_type == AssetType.EPF
+
+
+def test_normalize_mf_prefers_total_units_over_quantity():
+    """INDmoney-style MF rows: `quantity` may be 1 while `total_units` holds scheme units."""
+    raw = {
+        "holdings": [
+            {
+                "name": "Test Flexi Fund",
+                "asset_type": "MF",
+                "quantity": 1,
+                "total_units": 500.25,
+                "unit_price": 20.0,
+                "market_value": 10005.0,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    assert abs(out[0].quantity - 500.25) < 1e-6
+
+
+def test_dedupe_keeps_distinct_folios_same_isin():
+    """Same ISIN in two folios must not collapse to one line (regression: ISIN-only dedupe key)."""
+    from app.services.fx_book import dedupe_holdings_by_instrument
+
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def row(hid: str, mv: float) -> NormalizedHolding:
+        return NormalizedHolding(
+            id=hid,
+            name="Scheme",
+            symbol="SCHEME",
+            isin="INF204KA1",
+            quantity=100.0,
+            last_price=10.0,
+            market_value=mv,
+            updated_at=now,
+            asset_type=AssetType.MF,
+            country=Country.IN,
+            currency=Currency.INR,
+        )
+
+    out = dedupe_holdings_by_instrument([row("folio-a", 1000.0), row("folio-b", 2000.0)])
+    assert len(out) == 2
+
+
 def test_normalize_dedupes_stable_id():
     raw = {
         "holdings": [
@@ -141,3 +221,112 @@ def test_allocation_pcts_sum():
     assert abs(sum(s.pct for s in by_country) - 100.0) < 0.01
     keys = {s.key for s in by_type}
     assert "IN_STOCK" in keys and "US_STOCK" in keys
+
+
+def test_broker_reported_inr_accepts_camel_case_keys():
+    row = {"currentValueInr": 64_500.0, "marketValue": 5000.0}
+    assert _broker_reported_inr(row) == 64_500.0
+
+
+def test_broker_reported_inr_prefers_inr_market_value():
+    row = {"inr_market_value": 100.0, "current_value_inr": 200.0}
+    assert _broker_reported_inr(row) == 100.0
+
+
+def test_normalize_us_stock_inr_quoted_ltp_converted_to_usd_and_inflated_mv_clamped():
+    """INDmoney can send INR per-share in ``ltp`` while ``market_value`` is still wrong USD scale."""
+    from app.config import settings
+
+    rate = float(settings.usdinr_rate)
+    raw = {
+        "holdings": [
+            {
+                "name": "NVIDIA Corporation",
+                "asset_type": "US_STOCK",
+                "quantity": 0.141,
+                "ltp": 19893.35,
+                "market_value": 2802.17,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    h = out[0]
+    usd_ltp = 19893.35 / rate
+    assert abs(h.last_price - usd_ltp) < 0.05
+    assert h.market_value < 500.0
+    assert abs(h.market_value - (0.141 * usd_ltp)) < 1.0
+
+
+def test_normalize_us_stock_brk_high_usd_ltp_not_converted_as_inr():
+    raw = {
+        "holdings": [
+            {
+                "name": "Berkshire Hathaway Inc A",
+                "asset_type": "US_STOCK",
+                "quantity": 0.01,
+                "ltp": 650_000.0,
+                "market_value": 6500.0,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    assert out[0].last_price == 650_000.0
+
+
+    raw = {
+        "holdings": [
+            {
+                "name": "Vanguard S&P 500 ETF",
+                "asset_type": "US_STOCK",
+                "quantity": 0.076,
+                "ltp": 688.11,
+                "market_value": 688.11,
+                "current_value": 52.28,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    assert abs(out[0].market_value - 52.28) < 0.02
+
+
+def test_normalize_us_stock_when_market_value_echoes_ltp_uses_qty_times_ltp():
+    """If only per-share echo is present, position USD = qty * ltp (fractional shares)."""
+    raw = {
+        "holdings": [
+            {
+                "name": "VOO",
+                "asset_type": "US_STOCK",
+                "quantity": 0.076,
+                "ltp": 688.11,
+                "market_value": 688.11,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    assert abs(out[0].market_value - (0.076 * 688.11)) < 0.02
+
+
+def test_normalize_two_epf_same_ind_key_different_names_are_not_deduped():
+    raw = {
+        "holdings": [
+            {
+                "name": "Employer A Ltd — EPF",
+                "asset_type": "EPF",
+                "ind_key": "epf-generic",
+                "market_value": 129_858.0,
+            },
+            {
+                "name": "Employer B Ltd — EPF",
+                "asset_type": "EPF",
+                "ind_key": "epf-generic",
+                "market_value": 129_619.0,
+            },
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 2
+    assert abs(sum(h.market_value for h in out) - (129_858.0 + 129_619.0)) < 0.01
