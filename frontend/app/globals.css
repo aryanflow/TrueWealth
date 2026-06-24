@@ -4,11 +4,29 @@
 
 :root {
   color-scheme: dark;
+  --ink-bg: #0a0b0f;
+  --ink2: #0d0f15;
+  --panel: #13151d;
+  --panel2: #171a24;
+  --line: #23262f;
+  --line2: #2c3039;
+  --brass: #c9a24b;
+  --brass-soft: #e2c988;
+  --brass-dim: #8a7338;
+  --mint: #6fe0b0;
+  --coral: #f0817e;
+  --peri: #86a6ff;
+  --txt: #ececf1;
+  --txt2: #a6abb8;
+  --txt3: #6b7080;
 }
 
 body {
-  @apply bg-canvas text-ink antialiased;
+  @apply bg-canvas font-sans text-ink antialiased;
   min-height: 100vh;
+  background-image:
+    radial-gradient(1100px 600px at 18% -8%, rgba(201, 162, 75, 0.08), transparent 60%),
+    radial-gradient(900px 700px at 100% 0%, rgba(134, 166, 255, 0.05), transparent 55%);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -21,18 +39,21 @@ body {
   }
 }
 
-/* Fixed full viewport; negative inset + absolute previously widened past 100vw and caused horizontal scroll. */
+@keyframes spine-grow {
+  from {
+    width: 0;
+  }
+}
+
 .depth-field {
   position: fixed;
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(closest-side at 18% 22%, rgba(110, 168, 255, 0.16), transparent 60%),
-    radial-gradient(closest-side at 74% 26%, rgba(104, 215, 198, 0.12), transparent 60%),
-    radial-gradient(closest-side at 58% 74%, rgba(255, 204, 102, 0.1), transparent 65%),
-    radial-gradient(closest-side at 24% 72%, rgba(255, 125, 154, 0.08), transparent 65%);
+    radial-gradient(closest-side at 18% 22%, rgba(201, 162, 75, 0.1), transparent 60%),
+    radial-gradient(closest-side at 74% 26%, rgba(134, 166, 255, 0.06), transparent 60%);
   filter: blur(34px) saturate(115%);
-  opacity: 0.9;
+  opacity: 0.55;
   transform: translateZ(0);
 }
 
@@ -41,15 +62,53 @@ body {
   font-feature-settings: "tnum" 1;
 }
 
-.glass {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.03));
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(10px);
+@layer components {
+  .eyebrow {
+    @apply mb-3.5 flex items-center gap-2.5 font-mono text-[10.5px] uppercase tracking-[0.34em] text-brass;
+  }
+
+  .eyebrow::before {
+    content: "";
+    @apply h-px w-[22px] bg-brass-dim;
+  }
+
+  .panel-card {
+    @apply rounded-[20px] border border-line bg-gradient-to-b from-panel to-ink2 p-6 shadow-card md:p-8;
+  }
+
+  .section-title {
+    @apply font-display text-[1.65rem] font-semibold tracking-tight text-ink md:text-[1.7rem];
+  }
+
+  .section-sub {
+    @apply mt-2 max-w-prose text-[13.5px] leading-relaxed text-muted;
+  }
+
+  .btn-primary {
+    @apply inline-flex min-h-10 items-center justify-center rounded-[10px] border-0 bg-gradient-to-b from-brass-soft to-brass px-[18px] py-2.5 text-[13px] font-medium text-[#1a1405] shadow-[0_6px_18px_-8px_rgba(201,162,75,0.6)] transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass/70 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
+  }
+
+  .btn-ghost {
+    @apply inline-flex min-h-10 items-center justify-center rounded-[10px] border border-line bg-panel px-[18px] py-2.5 text-[13px] font-medium text-ink transition hover:border-line2 hover:bg-panel2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
+  }
+
+  .link-action {
+    @apply font-medium text-peri underline-offset-2 transition hover:text-peri/85 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60;
+  }
+
+  .ibtn {
+    @apply grid h-10 min-h-10 w-10 min-w-10 place-items-center rounded-[11px] border border-line bg-panel text-muted transition hover:border-line2 hover:bg-panel2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60;
+  }
 }
 
-.glass-soft {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(10px);
+.tw-hide-balances .blur-balance,
+.tw-hide-balances .blur-balance * {
+  filter: blur(7px);
+  user-select: none;
+}
+
+.tw-hide-balances .blur-balance:hover,
+.tw-hide-balances .blur-balance:focus-within {
+  filter: none;
+  user-select: auto;
 }

@@ -2,32 +2,20 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { SettingsSheet } from "@/components/SettingsSheet";
 import { TrueWealthLogo } from "@/components/TrueWealthLogo";
 import { disclaimerPlainText } from "@/components/Disclaimer";
 import { usePortfolio } from "@/components/PortfolioContext";
-
-function fmtSync(iso: string | null | undefined): string {
-  if (!iso) return "Never";
-  try {
-    return new Date(iso).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      hour: "2-digit",
-      minute: "2-digit",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return "-";
-  }
-}
+import { useDisplayPreferences } from "@/components/DisplayPreferences";
+import { deriveConnectionDisplay } from "@/lib/connectionStatus";
+import { formatSyncShort } from "@/lib/format";
 
 const tabs = [
-  { href: "/today", label: "Today" },
-  { href: "/map", label: "Map" },
-  { href: "/decide", label: "Decide" },
+  { href: "/today", label: "Today", num: "01" },
+  { href: "/map", label: "Map", num: "02" },
+  { href: "/decide", label: "Decide", num: "03" },
 ] as const;
 
 function routeTitle(pathname: string | null): string {
@@ -36,45 +24,56 @@ function routeTitle(pathname: string | null): string {
   return "Today";
 }
 
+const DOT_CLASS: Record<string, string> = {
+  mint: "bg-mint text-mint",
+  warn: "bg-warn text-warn",
+  coral: "bg-coral text-coral",
+  muted: "bg-muted-dim text-muted-dim",
+};
+
+const QUALITY_CLASS: Record<string, string> = {
+  good: "border-mint/40 bg-mint/10 text-mint",
+  degraded: "border-coral/40 bg-coral/10 text-coral",
+  partial: "border-brass-dim bg-brass/10 text-brass-soft",
+};
+
 export function HeaderShell() {
   const pathname = usePathname();
   const { data } = usePortfolio();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const connected = useMemo(() => {
-    if (!data) return false;
-    const m = data.meta;
-    return Boolean(m.indmoney_oauth_connected && m.mcp_connected && !m.mcp_degraded && m.mode === "live");
-  }, [data]);
+  useEffect(() => {
+    const open = () => setSettingsOpen(true);
+    window.addEventListener("tw-open-settings", open);
+    return () => window.removeEventListener("tw-open-settings", open);
+  }, []);
 
-  const lastSync = data?.meta.last_holdings_sync ?? data?.meta.last_price_sync;
+  const conn = useMemo(() => deriveConnectionDisplay(data?.meta), [data?.meta]);
   const pageLabel = routeTitle(pathname ?? null);
-  const conf = data?.meta.confidence ?? "partial";
-  const confNotes = data?.meta.confidence_notes?.join(" · ");
+  const { hideBalances, toggleHideBalances, displayCurrency, setDisplayCurrency } = useDisplayPreferences();
 
   return (
     <>
-      <header className="sticky top-0 z-50 border-b border-hairline bg-canvas/92 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
+      <header className="sticky top-0 z-50 border-b border-line bg-canvas/95 backdrop-blur-[14px]">
+        <div className="mx-auto flex h-[74px] max-w-7xl items-center justify-between gap-5 px-4 md:px-7">
           <Link
             href="/today"
-            className="group flex min-w-0 items-center gap-2.5"
+            className="group flex min-w-0 items-center gap-3"
             aria-label={`True Wealth, ${pageLabel}`}
           >
-            <span
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/[0.09] bg-gradient-to-br from-ion/20 to-mintglass/15 shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
-              aria-hidden
-            >
-              <TrueWealthLogo className="h-[22px] w-[22px]" />
+            <span className="flex h-11 w-10 shrink-0 items-center justify-center" aria-hidden>
+              <TrueWealthLogo className="h-11 w-10" />
             </span>
             <div className="min-w-0">
-              <p className="text-[13px] font-medium uppercase tracking-[0.12em] text-muted">True Wealth</p>
-              <p className="truncate text-[11px] font-normal text-muted">{pageLabel}</p>
+              <p className="font-display text-[18px] font-semibold uppercase tracking-[0.14em] leading-none text-ink">
+                True Wealth
+              </p>
+              <p className="mt-1 truncate text-[11px] uppercase tracking-[0.32em] text-muted-dim">{pageLabel}</p>
             </div>
           </Link>
 
           <nav
-            className="hidden items-center gap-0.5 rounded-2xl border border-white/[0.06] bg-black/25 p-1 sm:flex"
+            className="hidden items-center gap-0.5 rounded-full border border-line bg-panel p-1 sm:flex"
             aria-label="Primary"
           >
             {tabs.map((t) => {
@@ -83,74 +82,89 @@ export function HeaderShell() {
                 <Link
                   key={t.href}
                   href={t.href}
-                  className={`relative rounded-md px-3 py-1.5 font-display text-xs font-medium tracking-wide transition-colors duration-200 motion-reduce:transition-none ${
+                  className={`relative rounded-full px-5 py-2 text-[13.5px] tracking-wide transition-colors duration-200 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60 ${
                     active
-                      ? "bg-white/10 text-white"
-                      : "text-ink/40 hover:bg-white/[0.04] hover:text-ink/80"
+                      ? "bg-gradient-to-b from-[#20232E] to-[#191C26] text-brass-soft shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_2px_10px_rgba(0,0,0,0.4)]"
+                      : "text-muted hover:text-ink"
                   }`}
                 >
+                  <span className={`mr-1.5 font-mono text-[9.5px] ${active ? "text-brass" : "text-muted-dim"}`}>
+                    {t.num}
+                  </span>
                   {t.label}
                 </Link>
               );
             })}
           </nav>
 
-          <div className="flex shrink-0 items-center gap-3">
-            <div className="hidden text-right text-[11px] leading-tight text-muted sm:block">
-              <div className="flex items-center justify-end gap-1.5">
+          <div className="flex shrink-0 items-center gap-3 md:gap-4">
+            <div className="hidden text-right leading-tight sm:block" title={conn.qualityNotes}>
+              <div className="flex items-center justify-end gap-2 text-[12.5px]">
                 <span
-                  className={`h-2 w-2 rounded-full ${connected ? "bg-gain-muted" : "bg-warn-muted"}`}
-                  title={connected ? "Connected" : "Not connected"}
+                  className={`h-[7px] w-[7px] rounded-full shadow-[0_0_10px_currentColor] ${DOT_CLASS[conn.feedTone]}`}
                   aria-hidden
                 />
-                <span className="text-ink/90">{connected ? "Connected" : "Disconnected"}</span>
+                <span className="text-ink">{conn.feedLabel}</span>
                 <span
-                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide ${
-                    conf === "good"
-                      ? "border-gain-muted/40 text-gain-muted"
-                      : conf === "degraded"
-                        ? "border-loss-muted/40 text-loss-muted"
-                        : "border-amber-400/50 text-amber-200/95"
-                  }`}
-                  title={confNotes || (conf === "good" ? "Data quality: good" : "Hover for quality notes")}
+                  className={`rounded-md border px-2 py-0.5 font-mono text-[10px] tracking-wide ${QUALITY_CLASS[conn.quality]}`}
                 >
-                  {conf === "partial" ? "Partial data" : conf === "degraded" ? "Degraded" : "Good data"}
+                  {conn.qualityLabel}
                 </span>
               </div>
-              <p className="mt-0.5 font-mono text-[10px] text-muted/90">Last sync {fmtSync(lastSync)}</p>
+              <p className="mt-0.5 font-mono text-[10.5px] text-muted-dim">
+                Last sync {formatSyncShort(conn.lastSync)}
+              </p>
             </div>
             <button
               type="button"
-              onClick={() => setSettingsOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-hairline p-2 text-muted transition-colors duration-200 hover:border-ion/40 hover:text-ion motion-reduce:transition-none"
-              aria-label="Settings"
+              onClick={toggleHideBalances}
+              className="ibtn"
+              aria-label={hideBalances ? "Show balances" : "Hide balances"}
+              aria-pressed={hideBalances}
+              title={hideBalances ? "Show balances" : "Hide balances (privacy)"}
             >
-              <span className="hidden text-xs font-medium text-ink/80 md:inline">Settings</span>
+              <span aria-hidden>{hideBalances ? "◉" : "◎"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDisplayCurrency(displayCurrency === "INR" ? "USD" : "INR")}
+              className="hidden min-h-10 rounded-[11px] border border-line bg-panel px-2.5 font-mono text-[10px] text-muted transition hover:border-line2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60 sm:grid sm:place-items-center"
+              aria-label={`Display currency ${displayCurrency}`}
+              title="Toggle INR / USD display for USD-native lines"
+            >
+              {displayCurrency}
+            </button>
+            <button type="button" onClick={() => setSettingsOpen(true)} className="ibtn" aria-label="Open settings">
+              <span className="sr-only">Settings</span>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
                 <circle cx="12" cy="12" r="3" />
                 <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
               </svg>
             </button>
             <details className="relative hidden sm:block">
-              <summary className="cursor-pointer list-none rounded-lg border border-hairline px-2 py-1.5 text-xs font-medium text-muted marker:content-none hover:border-ion/40 hover:text-ion [&::-webkit-details-marker]:hidden">
-                (i)
+              <summary className="ibtn cursor-pointer list-none marker:content-none [&::-webkit-details-marker]:hidden">
+                <span className="sr-only">About this app</span>
+                <span aria-hidden className="text-sm font-medium">
+                  i
+                </span>
               </summary>
-              <div className="absolute right-0 z-[60] mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-line bg-canvas p-3 text-left text-xs leading-relaxed text-muted shadow-2xl">
+              <div className="absolute right-0 z-[60] mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-line bg-panel p-4 text-left text-xs leading-relaxed text-muted shadow-2xl">
                 {disclaimerPlainText()}
               </div>
             </details>
           </div>
         </div>
-        <nav className="flex border-t border-hairline/60 px-4 py-2 sm:hidden" aria-label="Primary mobile">
-          <div className="flex w-full justify-center gap-1 rounded-2xl border border-white/[0.06] bg-black/25 p-1">
+
+        <nav className="flex border-t border-line px-4 py-2 sm:hidden" aria-label="Primary mobile">
+          <div className="flex w-full justify-center gap-0.5 rounded-full border border-line bg-panel p-1">
             {tabs.map((t) => {
-              const active = pathname === t.href;
+              const active = pathname === t.href || (t.href === "/today" && pathname === "/");
               return (
                 <Link
                   key={t.href}
                   href={t.href}
-                  className={`flex-1 rounded-md px-2 py-1.5 text-center font-display text-xs font-medium tracking-wide transition ${
-                    active ? "bg-white/10 text-white" : "text-ink/40 hover:bg-white/[0.04] hover:text-ink/75"
+                  className={`min-h-10 flex-1 rounded-full px-2 py-2 text-center text-xs font-medium tracking-wide transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60 ${
+                    active ? "bg-gradient-to-b from-[#20232E] to-[#191C26] text-brass-soft" : "text-muted"
                   }`}
                 >
                   {t.label}

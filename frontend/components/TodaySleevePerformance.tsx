@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { useMemo } from "react";
 
-import { formatInr, formatPct } from "@/lib/format";
+import { MoneyValue } from "@/components/MoneyValue";
+import { sleeveColor } from "@/lib/assetLabels";
+import { deriveIntradayStatus, intradayUnavailableCopy } from "@/lib/intraday";
+import { mapSleeveHoldingsHref } from "@/lib/mapLinks";
+import { classifySleeve, filterHoldingsBySleeve, type SleeveId } from "@/lib/sleeves";
+import { formatPct } from "@/lib/format";
 import type { NormalizedHolding } from "@/lib/types";
-
-import { mapExposureHref } from "./TodayAllocationStrip";
 
 function bookInr(h: NormalizedHolding): number {
   const v = h.inr_market_value;
@@ -15,8 +18,7 @@ function bookInr(h: NormalizedHolding): number {
 }
 
 function dayInr(h: NormalizedHolding): number {
-  const d = h.inr_day_change_value ?? h.day_change_value;
-  return d ?? 0;
+  return h.inr_day_change_value ?? h.day_change_value ?? 0;
 }
 
 function unrealInr(h: NormalizedHolding): number | null {
@@ -24,251 +26,173 @@ function unrealInr(h: NormalizedHolding): number | null {
   return u != null ? u : null;
 }
 
-function includeHolding(h: NormalizedHolding): boolean {
-  return h.book_include !== false;
-}
+const SLEEVE_META: Record<
+  SleeveId,
+  { label: string; tagline: string; mapKey: string }
+> = {
+  mutual_funds: { label: "Mutual funds", tagline: "MFs in this view", mapKey: "MF" },
+  fixed_deposits: { label: "Fixed deposits", tagline: "FD & RD", mapKey: "FD" },
+  retirement: { label: "EPF & retirement", tagline: "EPF, NPS, PPF", mapKey: "EPF" },
+  indian_equity: { label: "Indian stocks", tagline: "Listed India · incl. ETFs", mapKey: "IN_STOCK" },
+  crypto: { label: "Crypto", tagline: "Digital assets", mapKey: "CRYPTO" },
+  us_equity: { label: "US stocks", tagline: "US listings · incl. ETFs", mapKey: "US_STOCK" },
+};
 
-export type TodaySleeveId = "indian_equity" | "us_equity" | "crypto" | "mutual_funds";
+const SLEEVE_ORDER: SleeveId[] = [
+  "mutual_funds",
+  "fixed_deposits",
+  "retirement",
+  "indian_equity",
+  "crypto",
+  "us_equity",
+];
 
-function classifySleeve(h: NormalizedHolding): TodaySleeveId | null {
-  const t = h.asset_type;
-  if (t === "CRYPTO") return "crypto";
-  if (t === "MF") return "mutual_funds";
-  if (t === "IN_STOCK") return "indian_equity";
-  if (t === "US_STOCK") return "us_equity";
-  if (t === "ETF") return h.country === "US" ? "us_equity" : "indian_equity";
-  return null;
-}
-
-/** Map deep-link asset slice key (best-effort for combined Indian equity sleeve). */
-function mapAssetKey(id: TodaySleeveId, indian: { stocks: number; etfs: number }): string {
-  if (id === "mutual_funds") return "MF";
-  if (id === "crypto") return "CRYPTO";
-  if (id === "us_equity") return "US_STOCK";
-  return indian.etfs > indian.stocks ? "ETF" : "IN_STOCK";
-}
-
-export interface SleeveRollup {
-  id: TodaySleeveId;
-  label: string;
-  tagline: string;
-  count: number;
-  book_inr: number;
-  day_inr: number;
-  day_pct_est: number | null;
-  unreal_inr: number | null;
-  /** True if every line in the sleeve had null unrealized. */
-  unreal_na: boolean;
-  /** Some lines had PnL, some did not. */
-  unreal_partial: boolean;
-  pct_of_book: number;
-  map_href: string;
-}
-
-function buildRollups(holdings: NormalizedHolding[], total_book_inr: number): SleeveRollup[] {
-  const ids: TodaySleeveId[] = ["indian_equity", "us_equity", "crypto", "mutual_funds"];
-  const meta: Record<
-    TodaySleeveId,
-    {
-      label: string;
-      tagline: string;
-      book: number;
-      day: number;
-      unreal: number;
-      unreal_lines: number;
-      n: number;
-    }
-  > = {
-    indian_equity: { label: "Indian stocks", tagline: "Listed India · incl. India ETFs", book: 0, day: 0, unreal: 0, unreal_lines: 0, n: 0 },
-    us_equity: { label: "US stocks", tagline: "US listings · incl. US ETFs", book: 0, day: 0, unreal: 0, unreal_lines: 0, n: 0 },
-    crypto: { label: "Crypto", tagline: "Digital assets", book: 0, day: 0, unreal: 0, unreal_lines: 0, n: 0 },
-    mutual_funds: { label: "Mutual funds", tagline: "MFs in this view", book: 0, day: 0, unreal: 0, unreal_lines: 0, n: 0 },
-  };
-
-  let indian_stocks_only = 0;
-  let indian_etfs_only = 0;
-
-  for (const h of holdings) {
-    if (!includeHolding(h)) continue;
-    const sleeve = classifySleeve(h);
-    if (!sleeve) continue;
-    const m = meta[sleeve];
-    const mv = bookInr(h);
-    const d = dayInr(h);
-    const u = unrealInr(h);
-    m.book += mv;
-    m.day += d;
-    m.n += 1;
-    if (sleeve === "indian_equity") {
-      if (h.asset_type === "ETF") indian_etfs_only += 1;
-      else if (h.asset_type === "IN_STOCK") indian_stocks_only += 1;
-    }
-    if (u != null) {
-      m.unreal += u;
-      m.unreal_lines += 1;
-    }
-  }
-
-  const indianCounts = { stocks: indian_stocks_only, etfs: indian_etfs_only };
-
-  return ids.map((id) => {
-    const m = meta[id];
+function buildRollups(holdings: NormalizedHolding[], total_book_inr: number) {
+  return SLEEVE_ORDER.map((id) => {
+    const lines = filterHoldingsBySleeve(holdings, id);
+    const meta = SLEEVE_META[id];
+    let book = 0;
+    let day = 0;
+    let unreal = 0;
+    let unreal_lines = 0;
     let prev = 0;
-    for (const h of holdings) {
-      if (!includeHolding(h)) continue;
-      if (classifySleeve(h) !== id) continue;
-      prev += bookInr(h) - dayInr(h);
+    for (const h of lines) {
+      const mv = bookInr(h);
+      book += mv;
+      day += dayInr(h);
+      prev += mv - dayInr(h);
+      const u = unrealInr(h);
+      if (u != null) {
+        unreal += u;
+        unreal_lines += 1;
+      }
     }
-    const day_pct_est = prev > 1 ? (m.day / prev) * 100 : null;
-    const pct_of_book = total_book_inr > 0 ? (m.book / total_book_inr) * 100 : 0;
-    const mapKey = mapAssetKey(id, indianCounts);
-    const unreal_na = m.n > 0 && m.unreal_lines === 0;
-    const unreal_partial = m.n > 0 && m.unreal_lines > 0 && m.unreal_lines < m.n;
+    const day_pct_est = prev > 1 ? (day / prev) * 100 : null;
+    const unreal_na = lines.length > 0 && unreal_lines === 0;
+    const unreal_partial = unreal_lines > 0 && unreal_lines < lines.length;
     return {
       id,
-      label: m.label,
-      tagline: m.tagline,
-      count: m.n,
-      book_inr: m.book,
-      day_inr: m.day,
+      label: meta.label,
+      tagline: meta.tagline,
+      count: lines.length,
+      book_inr: book,
+      day_inr: day,
       day_pct_est,
-      unreal_inr: unreal_na ? null : m.unreal,
+      unreal_inr: unreal_na ? null : unreal,
       unreal_na,
       unreal_partial,
-      pct_of_book,
-      map_href: mapExposureHref("asset", mapKey),
+      pct_of_book: total_book_inr > 0 ? (book / total_book_inr) * 100 : 0,
+      map_href: mapSleeveHoldingsHref(id, meta.mapKey),
     };
-  });
-}
-
-function pctTone(pct: number | null): string {
-  if (pct == null || Number.isNaN(pct)) return "text-muted";
-  if (pct > 0.02) return "text-gain-muted";
-  if (pct < -0.02) return "text-loss-muted";
-  return "text-muted";
-}
-
-function dayTone(n: number): string {
-  if (n > 0.5) return "text-gain-muted";
-  if (n < -0.5) return "text-loss-muted";
-  return "text-muted";
+  }).filter((r) => r.count > 0);
 }
 
 export function TodaySleevePerformance({
   holdings,
   total_book_inr,
+  totals,
 }: {
   holdings: NormalizedHolding[];
   total_book_inr: number;
+  totals?: { day_change_value: number };
 }) {
   const rows = useMemo(() => buildRollups(holdings, total_book_inr), [holdings, total_book_inr]);
+  const intraday = useMemo(
+    () =>
+      deriveIntradayStatus(
+        {
+          day_change_value: totals?.day_change_value ?? 0,
+          day_change_pct: null,
+          market_value: total_book_inr,
+          unrealized_pnl: null,
+        },
+        holdings,
+      ),
+    [holdings, totals, total_book_inr],
+  );
+
+  if (rows.length === 0) {
+    return (
+      <p className="text-sm text-muted">
+        No sleeves in this view. Widen the active view in Settings or run a data refresh.
+      </p>
+    );
+  }
 
   return (
-    <section className="space-y-4" aria-labelledby="today-sleeves-heading">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 id="today-sleeves-heading" className="font-display text-xl text-ink md:text-2xl">
-            How sleeves are doing
-          </h2>
-          <p className="mt-1 max-w-2xl text-sm text-muted">
-            Indian equities, US listings, crypto, and mutual funds—book size, today’s move, and unrealized PnL where the
-            feed gives cost basis. Same book as the header total.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {rows.map((r, i) => {
-          const accents = [
-            "from-teal-500/[0.12] to-transparent",
-            "from-ion/[0.14] to-transparent",
-            "from-amber-400/[0.10] to-transparent",
-            "from-rose-400/[0.09] to-transparent",
-          ];
-          const accent = accents[i % accents.length];
-          return (
-            <article
-              key={r.id}
-              className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-black/25 p-4 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-sm md:p-5"
-            >
-              <div
-                className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accent} opacity-90`}
-                aria-hidden
-              />
-              <div className="relative">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm font-semibold tracking-tight text-ink">{r.label}</h3>
-                    <p className="mt-0.5 text-[10px] leading-snug text-muted">{r.tagline}</p>
-                  </div>
-                  <span className="shrink-0 rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-muted">
-                    {r.count} {r.count === 1 ? "line" : "lines"}
-                  </span>
-                </div>
-
-                <p className="mt-4 font-mono text-lg text-ink md:text-xl">
-                  <span className="numeric">{formatInr(r.book_inr)}</span>
-                </p>
-                <p className="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-muted">Book (INR)</p>
-
-                <dl className="mt-4 space-y-2 border-t border-white/[0.06] pt-3 text-xs">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <dt className="text-muted">Weight in view</dt>
-                    <dd className="font-mono text-ink">{r.pct_of_book.toFixed(1)}%</dd>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <dt className="text-muted">Day move</dt>
-                    <dd className={`text-right font-mono ${dayTone(r.day_inr)}`}>
-                      {r.count === 0 ? (
-                        <span className="text-muted">—</span>
-                      ) : (
-                        <>
-                          {r.day_inr >= 0 ? "+" : ""}
-                          {formatInr(r.day_inr)}
-                          {r.day_pct_est != null ? (
-                            <span className={`ml-1.5 text-[10px] ${pctTone(r.day_pct_est)}`}>
-                              ({formatPct(r.day_pct_est)})
-                            </span>
-                          ) : null}
-                        </>
-                      )}
-                    </dd>
-                  </div>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <dt className="text-muted">Unrealized</dt>
-                    <dd className={`text-right font-mono ${r.unreal_inr == null ? "text-muted" : dayTone(r.unreal_inr)}`}>
-                      {r.count === 0 ? (
-                        "—"
-                      ) : r.unreal_na ? (
-                        "n/a"
-                      ) : (
-                        <>
-                          {(r.unreal_inr ?? 0) >= 0 ? "+" : ""}
-                          {formatInr(r.unreal_inr ?? 0)}
-                          {r.unreal_partial ? (
-                            <span className="ml-1 text-[10px] font-normal text-muted" title="Some lines lack cost basis">
-                              partial
-                            </span>
-                          ) : null}
-                        </>
-                      )}
-                    </dd>
-                  </div>
-                </dl>
-
-                <div className="mt-4 flex justify-end">
-                  <Link
-                    href={r.map_href}
-                    className="text-[10px] font-medium uppercase tracking-[0.14em] text-ion underline-offset-2 transition hover:text-ion/80"
-                  >
-                    Map →
-                  </Link>
-                </div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {rows.map((r) => {
+        const accent = sleeveColor(SLEEVE_META[r.id].mapKey);
+        return (
+          <article
+            key={r.id}
+            className="group relative overflow-hidden rounded-2xl border border-line bg-gradient-to-b from-panel to-ink2 p-5 transition hover:-translate-y-0.5 hover:border-line2 hover:shadow-raised motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+            style={{ borderLeftWidth: 3, borderLeftColor: accent }}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-[15px] font-semibold text-ink">{r.label}</h3>
+                <p className="mt-0.5 text-[11px] text-muted-dim">{r.tagline}</p>
               </div>
-            </article>
-          );
-        })}
-      </div>
-    </section>
+              <span className="shrink-0 rounded-md border border-line px-2 py-0.5 font-mono text-[10px] text-muted-dim">
+                {r.count} {r.count === 1 ? "line" : "lines"}
+              </span>
+            </div>
+
+            <p className="mt-4 text-[23px] font-semibold">
+              <MoneyValue inr={r.book_inr} className="text-[23px] text-ink" />
+            </p>
+            <p className="mt-0.5 text-[10px] uppercase tracking-[0.22em] text-muted-dim">Book · INR</p>
+
+            <dl className="mt-4 space-y-2 border-t border-line pt-3 text-xs">
+              <div className="flex justify-between gap-2">
+                <dt className="text-muted-dim">Weight in view</dt>
+                <dd className="font-mono text-muted">{r.pct_of_book.toFixed(1)}%</dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-muted-dim">Day move</dt>
+                <dd className={`text-right ${intraday === "available" ? "" : "text-muted-dim"}`}>
+                  {intraday !== "available" ? (
+                    <span className="text-[10px] font-sans">—</span>
+                  ) : (
+                    <MoneyValue inr={r.day_inr} signed className={r.day_inr >= 0 ? "text-mint" : "text-coral"} />
+                  )}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-muted-dim">Unrealized</dt>
+                <dd className="text-right">
+                  {r.unreal_na ? (
+                    <Link href="/decide#cost" className="link-action text-[11px] font-sans">
+                      Add cost basis
+                    </Link>
+                  ) : (
+                    <MoneyValue
+                      inr={r.unreal_inr ?? 0}
+                      signed
+                      className={(r.unreal_inr ?? 0) >= 0 ? "text-mint" : "text-coral"}
+                    />
+                  )}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="mt-4">
+              <Link
+                href={r.map_href}
+                className="btn-ghost w-full justify-center !min-h-9 !px-3 !py-2 !text-[11px]"
+              >
+                Show {r.count} holding{r.count === 1 ? "" : "s"} on Map →
+              </Link>
+            </div>
+          </article>
+        );
+      })}
+      {intraday !== "available" ? (
+        <p className="col-span-full text-xs text-muted-dim">{intradayUnavailableCopy(intraday)}</p>
+      ) : null}
+    </div>
   );
 }
+
+export { classifySleeve };

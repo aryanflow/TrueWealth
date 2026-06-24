@@ -1,13 +1,17 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { usePortfolio } from "@/components/PortfolioContext";
+import { summarizeAlerts } from "@/lib/alertSummary";
 
-const LS_KEY = "tw_dismiss_data_quality_banner";
+const LS_KEY = "tw_dismiss_cost_basis_banner";
 
+/** Single global strip for missing cost basis — Today tab only. */
 export function DataQualityBanner() {
+  const pathname = usePathname();
   const { data } = usePortfolio();
   const [dismissed, setDismissed] = useState(false);
 
@@ -19,15 +23,9 @@ export function DataQualityBanner() {
     }
   }, []);
 
-  const message = useMemo(() => {
-    if (!data) return null;
-    const conf = data.meta.confidence ?? "partial";
-    if (conf === "good") return null;
-    const notes = data.meta.confidence_notes?.filter(Boolean) ?? [];
-    if (notes.length) return notes.join(" · ");
-    if (conf === "partial") return "Partial data: book or basis may be incomplete for this pass.";
-    if (conf === "degraded") return "Degraded: sync, MCP, or price mapping needs attention.";
-    return null;
+  const missingN = useMemo(() => {
+    if (!data) return 0;
+    return summarizeAlerts(data.alerts, data.meta, data.holdings).missingCostHoldings;
   }, [data]);
 
   const onDismiss = useCallback(() => {
@@ -39,21 +37,27 @@ export function DataQualityBanner() {
     setDismissed(true);
   }, []);
 
-  if (!message || dismissed) return null;
+  const onToday = pathname === "/today" || pathname === "/";
+  if (!onToday || !data || missingN <= 0 || dismissed) return null;
 
   return (
-    <div className="border-b border-hairline bg-black/30 px-4 py-2 text-center text-[12px] text-muted motion-reduce:transition-none">
-      <span className="text-ink/90">{message}</span>
-      <Link href="/decide" className="ml-2 font-medium text-ion underline-offset-2 hover:text-ion/85">
-        Review in Decide
-      </Link>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="ml-3 rounded-md border border-line px-2 py-0.5 text-[11px] text-ink hover:bg-surface/50"
-      >
-        Dismiss
-      </button>
+    <div className="border-b border-line bg-coral/[0.045]">
+      <div className="mx-auto flex min-h-[46px] max-w-7xl flex-wrap items-center gap-3 px-4 py-2 text-[13px] text-muted md:px-7">
+        <span>
+          <strong className="font-semibold text-coral">{missingN} holding{missingN === 1 ? "" : "s"}</strong> missing
+          cost basis — affects PnL quality.
+        </span>
+        <Link href="/decide#cost" className="link-action shrink-0 text-[13px]">
+          Review in Decide →
+        </Link>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="ml-auto min-h-9 rounded-md border border-line px-3 py-1 text-xs text-muted-dim transition hover:border-line2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   );
 }

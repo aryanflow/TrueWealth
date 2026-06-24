@@ -32,14 +32,17 @@ def apply_inr_book(holdings: list[NormalizedHolding], *, usd_inr: float, fx_as_o
         if broker_inr > 0:
             # Broker-reported INR book (common on US lines); never multiply native MV by FX again.
             inr_mv = broker_inr
-            if h.currency == Currency.USD:
+            if h.inr_unrealized_pnl is not None:
+                inr_unreal = float(h.inr_unrealized_pnl)
+            elif h.currency == Currency.USD:
                 inr_unreal = float(unreal) * rate if unreal is not None else None
-                inr_day = float(day) * rate if day is not None else None
-                fx_used = None
             else:
                 inr_unreal = float(unreal) if unreal is not None else None
+            if h.currency == Currency.USD:
+                inr_day = float(day) * rate if day is not None else None
+            else:
                 inr_day = float(day) if day is not None else None
-                fx_used = None
+            fx_used = None
             fx_ts = ts
         elif h.currency == Currency.USD:
             q = float(h.quantity or 0.0)
@@ -59,7 +62,10 @@ def apply_inr_book(holdings: list[NormalizedHolding], *, usd_inr: float, fx_as_o
                 inr_mv = mv * rate
                 fx_used = rate
             fx_ts = ts
-            inr_unreal = float(unreal) * rate if unreal is not None else None
+            if h.inr_unrealized_pnl is not None:
+                inr_unreal = float(h.inr_unrealized_pnl)
+            else:
+                inr_unreal = float(unreal) * rate if unreal is not None else None
             inr_day = float(day) * rate if day is not None else None
         else:
             inr_mv = mv

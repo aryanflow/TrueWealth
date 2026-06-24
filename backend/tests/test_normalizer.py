@@ -310,6 +310,35 @@ def test_normalize_us_stock_when_market_value_echoes_ltp_uses_qty_times_ltp():
     assert abs(out[0].market_value - (0.076 * 688.11)) < 0.02
 
 
+def test_normalize_us_stock_inr_invested_and_total_pnl_for_unrealized():
+    """INDmoney US rows: invested_amount and total_pnl are INR; avg/unreal must not mix INR with USD LTP."""
+    from app.config import settings
+
+    rate = float(settings.usdinr_rate)
+    raw = {
+        "holdings": [
+            {
+                "name": "Amazon.com, Inc. Common Stock",
+                "asset_type": "US_STOCK",
+                "total_units": 0.0807651,
+                "unit_price": 23075.30329487915,
+                "invested_amount": 1888.3999633789062,
+                "market_value": 1863.6791781412444,
+                "total_pnl": -24.720785237661858,
+            }
+        ]
+    }
+    out = normalize_payload(raw, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    assert len(out) == 1
+    h = out[0]
+    usd_ltp = 23075.30329487915 / rate
+    assert abs(h.last_price - usd_ltp) < 0.05
+    assert abs(h.avg_cost - (1888.3999633789062 / rate / 0.0807651)) < 0.05
+    assert abs(h.unrealized_pnl - (-24.720785237661858 / rate)) < 0.05
+    assert abs(h.inr_unrealized_pnl - (-24.720785237661858)) < 0.02
+    assert abs(h.inr_market_value - 1863.6791781412444) < 0.02
+
+
 def test_normalize_two_epf_same_ind_key_different_names_are_not_deduped():
     raw = {
         "holdings": [

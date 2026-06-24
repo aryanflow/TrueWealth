@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { MoneyValue } from "@/components/MoneyValue";
 import { usePortfolio } from "@/components/PortfolioContext";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { formatInr, formatValue } from "@/lib/format";
+import { labelSlice } from "@/lib/assetLabels";
+import { formatValue } from "@/lib/format";
 import type { NormalizedHolding } from "@/lib/types";
 
 const NOTE_PREFIX = "tw_holding_note:";
@@ -49,7 +51,8 @@ export function HoldingInspectorSheet() {
           <div>
             <SheetTitle className="pr-8 leading-snug">{h.name}</SheetTitle>
             <SheetDescription>
-              {h.asset_type} · {h.currency}
+              {labelSlice(h.asset_type)} · {h.currency}
+              {h.symbol ? ` · ${h.symbol}` : ""}
             </SheetDescription>
           </div>
           <SheetClose className="rounded-md border border-hairline px-2 py-1 text-xs text-muted hover:text-ink">
@@ -60,7 +63,9 @@ export function HoldingInspectorSheet() {
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-lg border border-hairline bg-surface-elevated/50 p-3">
               <p className="text-[10px] uppercase tracking-wide text-muted">Value (INR book)</p>
-              <p className="mt-1 font-mono text-ink">{formatInr(bookInr(h))}</p>
+              <p className="mt-1">
+                <MoneyValue inr={bookInr(h)} native={h.market_value} currency={h.currency} className="text-ink" />
+              </p>
             </div>
             <div className="rounded-lg border border-hairline bg-surface-elevated/50 p-3">
               <p className="text-[10px] uppercase tracking-wide text-muted">Weight</p>
@@ -78,12 +83,24 @@ export function HoldingInspectorSheet() {
               ) : null}
             </p>
           ) : null}
+          {h.avg_cost == null ? (
+            <Link
+              href={`/decide?holding=${encodeURIComponent(h.id)}#cost`}
+              onClick={() => setInspectorHolding(null)}
+              className="link-action inline-flex text-sm"
+            >
+              Add cost basis for P&amp;L →
+            </Link>
+          ) : null}
           {h.inr_unrealized_pnl != null ? (
             <p className={`text-sm font-mono ${h.inr_unrealized_pnl >= 0 ? "text-gain-muted" : "text-loss-muted"}`}>
-              Unrealized P&amp;L (INR) {formatInr(h.inr_unrealized_pnl)}
+              Unrealized P&amp;L (INR){" "}
+              <MoneyValue inr={h.inr_unrealized_pnl} signed className={h.inr_unrealized_pnl >= 0 ? "text-gain-muted" : "text-loss-muted"} />
             </p>
+          ) : h.avg_cost == null ? (
+            <p className="text-xs text-muted">Cost basis not set — P&amp;L unavailable until you add it or sync averages.</p>
           ) : (
-            <p className="text-xs text-muted">Cost basis not set on this line. P&amp;L unavailable.</p>
+            <p className="text-xs text-muted">Unrealized P&amp;L not available for this line.</p>
           )}
           <div className="rounded-lg border border-dashed border-hairline bg-surface-elevated/30 p-4 text-center text-xs text-muted">
             Price history coming

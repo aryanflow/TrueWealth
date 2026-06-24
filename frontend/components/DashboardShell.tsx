@@ -2,6 +2,7 @@
 
 import { CommandPaletteProvider } from "@/components/CommandPalette";
 import { DataQualityBanner } from "@/components/DataQualityBanner";
+import { DisplayPreferencesProvider } from "@/components/DisplayPreferences";
 import { HeaderShell } from "@/components/HeaderShell";
 import { HoldingInspectorSheet } from "@/components/HoldingInspectorSheet";
 import { OnboardingGate } from "@/components/OnboardingGate";
@@ -44,16 +45,18 @@ function DashboardBody({ children }: { children: React.ReactNode }) {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <PortfolioProvider>
-      <CommandPaletteProvider>
-        <div className="relative min-h-screen overflow-x-hidden bg-canvas">
-          <div
-            className="pointer-events-none depth-field opacity-40 motion-safe:animate-drift motion-reduce:animate-none"
-            aria-hidden
-          />
-          <HeaderShell />
-          <DashboardBody>{children}</DashboardBody>
-        </div>
-      </CommandPaletteProvider>
+      <DisplayPreferencesProvider>
+        <CommandPaletteProvider>
+          <div className="relative min-h-screen overflow-x-hidden bg-canvas">
+            <div
+              className="pointer-events-none depth-field opacity-40 motion-safe:animate-drift motion-reduce:animate-none"
+              aria-hidden
+            />
+            <HeaderShell />
+            <DashboardBody>{children}</DashboardBody>
+          </div>
+        </CommandPaletteProvider>
+      </DisplayPreferencesProvider>
     </PortfolioProvider>
   );
 }

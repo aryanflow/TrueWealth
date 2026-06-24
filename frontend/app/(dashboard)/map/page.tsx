@@ -9,7 +9,9 @@ import { ExposureCard } from "@/components/ExposureCard";
 import { FundLabSection } from "@/components/FundLabSection";
 import { HoldingsTable } from "@/components/HoldingsTable";
 import { usePortfolio } from "@/components/PortfolioContext";
+import { labelSlice } from "@/lib/assetLabels";
 import { formatInr } from "@/lib/format";
+import { filterHoldingsBySleeve, type SleeveId } from "@/lib/sleeves";
 import type { NormalizedHolding } from "@/lib/types";
 
 function bookInr(h: NormalizedHolding): number {
@@ -18,41 +20,93 @@ function bookInr(h: NormalizedHolding): number {
   return h.market_value;
 }
 
+const SLEEVE_LABELS: Record<SleeveId, string> = {
+  mutual_funds: "Mutual funds",
+  fixed_deposits: "Fixed deposits",
+  retirement: "EPF & retirement",
+  indian_equity: "Indian stocks",
+  crypto: "Crypto",
+  us_equity: "US stocks",
+};
+
+function parseSleeve(raw: string | null): SleeveId | null {
+  if (!raw) return null;
+  const ids = Object.keys(SLEEVE_LABELS) as SleeveId[];
+  return ids.includes(raw as SleeveId) ? (raw as SleeveId) : null;
+}
+
 function MapPageInner() {
   const searchParams = useSearchParams();
   const focus = searchParams.get("focus");
   const key = searchParams.get("key");
-  const focusKey = `${focus ?? ""}|${key ?? ""}`;
+  const sleeve = parseSleeve(searchParams.get("sleeve"));
+  const openHoldings = searchParams.get("holdings") === "1";
+  const focusHoldingId = searchParams.get("holding");
+  const focusKey = `${focus ?? ""}|${key ?? ""}|${sleeve ?? ""}|${openHoldings}|${focusHoldingId ?? ""}`;
 
   const exposureAnchorRef = useRef<HTMLDivElement>(null);
+  const holdingsAnchorRef = useRef<HTMLDivElement>(null);
   const { data, err, loading, thr, setInspectorHolding, openHoldingById, reload } = usePortfolio();
-  const [tableOpen, setTableOpen] = useState(false);
-  const [columnPreset, setColumnPreset] = useState<"simple" | "pro">("simple");
+  const [tableOpen, setTableOpen] = useState(openHoldings);
+  const [columnPreset, setColumnPreset] = useState<"simple" | "pro">("pro");
+  const [donutFocus, setDonutFocus] = useState<string | null>(null);
 
   const thrNum = parseFloat(thr) || 15;
 
+  const holdingsForTable = useMemo(() => {
+    if (!data) return [];
+    if (!sleeve) return data.holdings;
+    return filterHoldingsBySleeve(data.holdings, sleeve);
+  }, [data, sleeve]);
+
   const totalInrActive = useMemo(() => {
-    if (!data) return 0;
-    return data.holdings.reduce((s, h) => s + bookInr(h), 0);
-  }, [data]);
+    return holdingsForTable.reduce((s, h) => s + bookInr(h), 0);
+  }, [holdingsForTable]);
 
   useEffect(() => {
-    if (!focus && !key) return;
-    const el = exposureAnchorRef.current ?? document.getElementById("map-exposure");
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [focusKey, focus, key]);
+    if (openHoldings || focusHoldingId) {
+      setTableOpen(true);
+      const t = window.setTimeout(() => {
+        if (focusHoldingId) {
+          const row = document.getElementById(`holding-row-${focusHoldingId}`);
+          row?.scrollIntoView({ behavior: "smooth", block: "center" });
+        } else {
+          holdingsAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 120);
+      return () => window.clearTimeout(t);
+    }
+    if (focus || key) {
+      exposureAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [focusKey, focus, key, openHoldings, focusHoldingId]);
+
+  useEffect(() => {
+    if (!focusHoldingId || !data) return;
+    openHoldingById(focusHoldingId);
+  }, [focusHoldingId, data, openHoldingById]);
+
+  useEffect(() => {
+    if (key) {
+      try {
+        setDonutFocus(decodeURIComponent(key));
+      } catch {
+        setDonutFocus(key);
+      }
+    }
+  }, [key]);
 
   if (loading) {
     return (
-      <main className="mx-auto max-w-6xl px-4 py-12">
-        <div className="h-40 rounded-2xl bg-line/40" />
+      <main className="mx-auto max-w-7xl px-4 py-12 md:px-7">
+        <div className="h-40 animate-pulse rounded-[20px] bg-panel2" />
       </main>
     );
   }
 
   if (err || !data) {
     return (
-      <main className="mx-auto max-w-lg px-4 py-24 text-center">
+      <main className="mx-auto max-w-lg px-4 py-24 text-center md:px-7">
         <h1 className="font-display text-2xl text-ink">Could not load portfolio</h1>
         <p className="mt-2 text-muted">{err ?? "Unknown error"}</p>
       </main>
@@ -63,24 +117,38 @@ function MapPageInner() {
   const viewName = data.meta.active_view?.name ?? "All assets";
 
   return (
-    <main className="mx-auto max-w-6xl space-y-8 px-4 py-10 md:space-y-10">
-      {excluded > 0.01 ? (
-        <div className="rounded-xl border border-warn-muted/25 bg-warn-muted/10 px-4 py-3 text-sm text-ink/90">
-          <p>
-            <span className="font-medium text-ink">{formatInr(excluded)}</span> of the full INR book is outside the active
-            view <span className="text-muted">({viewName})</span> — US stocks, FDs, or other toggled sleeves may be hidden.
-            Edit sleeves in <strong className="text-ink">Settings</strong> (header gear) → Views.
-          </p>
-          {data.allocation_full_book ? (
-            <p className="mt-2 text-xs text-muted">
-              Full-book asset mix is available on the API as <span className="font-mono text-ink/80">allocation_full_book</span>{" "}
-              for comparison with the active view slices.
-            </p>
+    <main className="mx-auto max-w-7xl space-y-10 px-4 py-10 pb-20 md:px-7 md:py-[42px]">
+      <div className="eyebrow">Map · where is my money</div>
+      <div>
+        <h1 className="section-title">The exposure atlas</h1>
+        <p className="section-sub">
+          Same sleeves, three lenses — plus holdings filtered when you arrive from a sleeve card on Today.
+        </p>
+      </div>
+
+      {sleeve ? (
+        <div className="rounded-xl border border-peri/30 bg-peri/10 px-4 py-3 text-sm text-ink">
+          <strong>{SLEEVE_LABELS[sleeve]}</strong> — showing {holdingsForTable.length} holding
+          {holdingsForTable.length === 1 ? "" : "s"} in this sleeve
+          {key ? (
+            <>
+              {" "}
+              · exposure slice <span className="font-mono text-peri">{labelSlice(key, "asset")}</span>
+            </>
           ) : null}
         </div>
       ) : null}
 
-      <div ref={exposureAnchorRef} className="grid gap-6 lg:grid-cols-2 lg:items-start">
+      {excluded > 0.01 ? (
+        <div className="rounded-xl border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-ink">
+          <p>
+            <span className="font-mono font-medium">{formatInr(excluded)}</span> outside active view{" "}
+            <span className="text-muted">({viewName})</span>. Edit in <strong>Settings → Views</strong>.
+          </p>
+        </div>
+      ) : null}
+
+      <div id="map-exposure" ref={exposureAnchorRef} className="grid gap-6 lg:grid-cols-2 lg:items-start">
         <ExposureCard
           by_asset_type={data.allocation.by_asset_type}
           by_currency={data.allocation.by_currency}
@@ -88,29 +156,36 @@ function MapPageInner() {
           initialTab={focus}
           highlightKey={key}
         />
-        <section className="rounded-xl border border-line bg-surface/60 p-4 shadow-card">
-          <h3 className="font-display text-lg text-ink">Allocation donut</h3>
-          <p className="mt-1 text-xs text-muted">Same sleeves as exposure · active view</p>
-          <div className="mt-2">
-            <DonutAllocation slices={data.allocation.by_asset_type} />
+        <section className="panel-card">
+          <h3 className="font-display text-lg font-semibold text-ink">Allocation</h3>
+          <p className="mt-1 font-mono text-xs text-muted-dim">active view · share of book</p>
+          <div className="mt-4">
+            <DonutAllocation
+              slices={data.allocation.by_asset_type}
+              kind="asset"
+              focusKey={donutFocus}
+              onFocus={setDonutFocus}
+            />
           </div>
         </section>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-1">
-        <DecisionCharts
-          history={data.history}
-          holdings={data.holdings}
-          thresholdPct={thrNum}
-          meta={data.meta}
-          totalInrActive={totalInrActive}
-          highlightHoldingId={null}
-          onSelectHolding={(id) => openHoldingById(id)}
-          alerts={data.alerts}
-        />
-      </div>
+      <DecisionCharts
+        history={data.history}
+        holdings={sleeve ? holdingsForTable : data.holdings}
+        thresholdPct={thrNum}
+        meta={data.meta}
+        totalInrActive={totalInrActive}
+        highlightHoldingId={focusHoldingId}
+        onSelectHolding={(id) => openHoldingById(id)}
+        alerts={data.alerts}
+      />
 
-      <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:overflow-visible md:px-0">
+      <div
+        id="map-holdings"
+        ref={holdingsAnchorRef}
+        className="-mx-4 scroll-mt-28 px-4 md:mx-0 md:px-0"
+      >
         {!tableOpen ? (
           <button
             type="button"
@@ -118,16 +193,23 @@ function MapPageInner() {
               setColumnPreset("pro");
               setTableOpen(true);
             }}
-            className="w-full min-w-0 rounded-2xl border border-hairline bg-surface-elevated/40 px-4 py-4 text-left text-sm font-medium text-ink hover:border-ion/35"
+            className="btn-ghost w-full justify-between !px-5 !py-4 text-left hover:border-peri/40"
           >
-            Show holdings ({data.holdings.length}) — opens pro columns
+            <span>
+              Show holdings ({sleeve ? holdingsForTable.length : data.holdings.length}
+              {sleeve ? ` · ${SLEEVE_LABELS[sleeve]}` : ""})
+            </span>
+            <span className="text-muted-dim">tap rows for inspector →</span>
           </button>
         ) : (
           <HoldingsTable
-            holdings={data.holdings}
+            holdings={holdingsForTable}
+            highlightHoldingId={focusHoldingId}
             onRowClick={(h) => setInspectorHolding(h)}
             columnPreset={columnPreset}
             columnPresetControl={{ value: columnPreset, onChange: setColumnPreset }}
+            exportFilename={sleeve ? `true-wealth-${sleeve}` : "true-wealth-holdings"}
+            title={sleeve ? `${SLEEVE_LABELS[sleeve]} holdings` : "Holdings"}
           />
         )}
       </div>
@@ -141,8 +223,8 @@ export default function MapPage() {
   return (
     <Suspense
       fallback={
-        <main className="mx-auto max-w-6xl px-4 py-12">
-          <div className="h-40 rounded-2xl bg-line/40" />
+        <main className="mx-auto max-w-7xl px-4 py-12 md:px-7">
+          <div className="h-40 rounded-[20px] bg-panel2" />
         </main>
       }
     >

@@ -4,10 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { formatInr } from "@/lib/format";
-import { CHART_STACK_COLORS } from "@/lib/chartColors";
+import { colorForSliceKey } from "@/lib/chartColors";
+import { labelSlice } from "@/lib/assetLabels";
 import type { AllocationSlice } from "@/lib/types";
-
-const COLORS = [...CHART_STACK_COLORS];
 
 type Tab = "asset" | "country" | "currency";
 
@@ -97,15 +96,17 @@ export function ExposureCard({
   const keyLabels = useMemo(() => {
     const m: Record<string, string> = {};
     sorted.slice(0, 8).forEach((s, i) => {
-      m[`s${i}`] = s.key;
+      m[`s${i}`] = labelSlice(s.key, tab);
     });
     if (sorted.length > 8) m.s_other = "Other";
     return m;
-  }, [sorted]);
+  }, [sorted, tab]);
 
   const top = sorted[0];
   const insight =
-    top && top.pct > 70 ? `Top sleeve is ${top.key} at ${top.pct.toFixed(1)}%, which dominates the book.` : null;
+    top && top.pct > 70
+      ? `Largest sleeve is ${labelSlice(top.key, tab)} at ${top.pct.toFixed(1)}%, which dominates the book.`
+      : null;
 
   const tabBtn = (id: Tab, label: string, disabled: boolean, disabledReason: string) => (
     <button
@@ -114,8 +115,12 @@ export function ExposureCard({
       disabled={disabled}
       title={disabled ? disabledReason : undefined}
       onClick={() => !disabled && setTab(id)}
-      className={`rounded-full px-3 py-1 text-xs font-medium ${
-        disabled ? "cursor-not-allowed opacity-45 text-muted" : tab === id ? "bg-ion/25 text-ion" : "text-muted hover:text-ink"
+      className={`min-h-9 rounded-md px-4 py-1.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60 ${
+        disabled
+          ? "cursor-not-allowed opacity-45 text-muted-dim"
+          : tab === id
+            ? "bg-panel2 text-brass-soft"
+            : "text-muted-dim hover:text-ink"
       }`}
     >
       {label}
@@ -123,18 +128,19 @@ export function ExposureCard({
   );
 
   return (
-    <section
-      id="map-exposure"
-      className="rounded-xl border border-line bg-surface/60 p-4 shadow-card scroll-mt-24"
-    >
+    <section id="map-exposure" className="panel-card scroll-mt-28">
       {decodedHighlight ? (
-        <p className="mb-3 rounded-lg border border-ion/25 bg-ion/10 px-3 py-2 text-xs text-ink/90">
-          Showing: <span className="font-medium text-ion">{decodedHighlight}</span>
+        <p className="mb-3 rounded-lg border border-peri/25 bg-peri/10 px-3 py-2 text-xs text-ink">
+          Showing: <span className="font-medium text-peri">{labelSlice(decodedHighlight, tab)}</span>
         </p>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="font-display text-lg text-ink">Exposure</h3>
-        <div className="flex gap-1 rounded-full border border-line bg-canvas/40 p-0.5" role="tablist" aria-label="Exposure breakdown">
+        <h3 className="font-display text-lg font-semibold text-ink">Exposure</h3>
+        <div
+          className="inline-flex gap-0.5 rounded-lg border border-line bg-ink-bg p-1"
+          role="tablist"
+          aria-label="Exposure breakdown"
+        >
           {tabBtn("asset", "Asset", false, "")}
           {tabBtn(
             "country",
@@ -150,7 +156,7 @@ export function ExposureCard({
           )}
         </div>
       </div>
-      <p className="mt-1 text-xs text-muted">Active view · stacked allocation</p>
+      <p className="mt-1 font-mono text-xs text-muted-dim">Active view · stacked allocation</p>
       <div className="mt-4 h-24 min-h-[5.5rem]">
         {sorted.length === 0 ? (
           <p className="text-sm text-muted">No positions in this view.</p>
@@ -167,8 +173,9 @@ export function ExposureCard({
               {keys.map((k, i) => {
                 const origPct = sorted[i]?.pct ?? 0;
                 const showLabel = origPct >= 8;
+                const sliceKey = sorted[i]?.key ?? "";
                 return (
-                  <Bar key={k} dataKey={k} stackId="one" fill={COLORS[i % COLORS.length]} radius={[0, 4, 4, 0]}>
+                  <Bar key={k} dataKey={k} stackId="one" fill={colorForSliceKey(sliceKey, i)} radius={[0, 4, 4, 0]}>
                     {showLabel ? (
                       <LabelList
                         dataKey={k}
@@ -208,21 +215,21 @@ export function ExposureCard({
           </ResponsiveContainer>
         )}
       </div>
-      {insight ? <p className="mt-3 text-xs text-ember/90">{insight}</p> : null}
-      <ul className="mt-4 max-h-48 space-y-1.5 overflow-y-auto border-t border-line/60 pt-3 text-xs">
-        {sorted.map((s) => {
+      {insight ? <p className="mt-3 text-xs text-ember">{insight}</p> : null}
+      <ul className="mt-4 max-h-52 space-y-1 overflow-y-auto border-t border-line pt-3 text-xs">
+        {sorted.map((s, i) => {
           const hi = decodedHighlight != null && decodedHighlight === s.key;
           return (
             <li
               key={s.key}
-              className={`flex justify-between gap-2 rounded-lg px-2 py-1 font-mono transition-colors ${
-                hi ? "border border-ion/40 bg-ion/10 text-muted ring-1 ring-ion/30" : "text-muted"
+              className={`flex justify-between gap-2 rounded-lg px-2 py-1.5 font-mono transition-colors ${
+                hi ? "border border-peri/40 bg-peri/10 text-ink ring-1 ring-peri/30" : "text-muted"
               }`}
             >
-              <span className={`truncate ${hi ? "text-ink" : "text-ink/90"}`}>{s.key}</span>
-              <span>
+              <span className={`min-w-0 truncate ${hi ? "text-ink" : ""}`}>{labelSlice(s.key, tab)}</span>
+              <span className="shrink-0">
                 <span className="text-ink">{s.pct.toFixed(1)}%</span>
-                <span className="ml-2 text-mintglass/90">{formatInr(s.value)}</span>
+                <span className="ml-2 text-mint">{formatInr(s.value)}</span>
               </span>
             </li>
           );

@@ -58,3 +58,24 @@ def test_apply_inr_usd_native_notional_still_multiplies_by_rate():
     )
     out = apply_inr_book([h], usd_inr=83.0, fx_as_of=now)
     assert abs(out[0].inr_market_value - 8300.0) < 0.01
+
+
+def test_apply_inr_usd_broker_inr_unreal_not_fx_doubled():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    h = NormalizedHolding(
+        id="1",
+        name="AMZN",
+        quantity=0.08,
+        last_price=233.0,
+        market_value=18.6,
+        unrealized_pnl=-0.26,
+        inr_market_value=1780.0,
+        inr_unrealized_pnl=-24.72,
+        updated_at=now,
+        asset_type=AssetType.US_STOCK,
+        country=Country.US,
+        currency=Currency.USD,
+    )
+    out = apply_inr_book([h], usd_inr=94.61, fx_as_of=now)
+    assert out[0].inr_market_value == 1780.0
+    assert abs(out[0].inr_unrealized_pnl - (-24.72)) < 0.01

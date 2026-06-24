@@ -372,13 +372,32 @@ def normalize_raw_holding(row: dict[str, Any], *, now: datetime | None = None) -
         )
     )
     mval = _resolve_raw_market_value(row, explicit_upper=explicit_pre, qty=qty, ltp=ltp, bal=bal)
-    if avg is None and inv_amt is not None and qty > 0:
+    rep_inr = _broker_reported_inr(row) or 0.0
+    inr_unreal_broker: float | None = None
+    rate = float(settings.usdinr_rate or 94.61)
+
+    if explicit_pre == "US_STOCK" and qty > 0 and rate > 0:
+        total_pnl_inr = _to_float(_pick(row, "total_pnl", "totalPnl", "pnl_total"))
+        if total_pnl_inr is not None:
+            inr_unreal_broker = total_pnl_inr
+        mv_inr_raw = _to_float(_pick(row, "market_value"))
+        if rep_inr <= 0 and mv_inr_raw and mv_inr_raw > 0 and ltp:
+            usd_notional = qty * float(ltp)
+            if usd_notional > 0 and mv_inr_raw > max(usd_notional * 8, 500):
+                rep_inr = mv_inr_raw
+        if inv_amt is not None:
+            avg = (inv_amt / rate) / qty
+        elif avg is not None and ltp is not None and avg > float(ltp) * 3:
+            # Legacy rows: avg was inv_inr/qty mislabeled as USD.
+            avg = avg / rate
+    elif avg is None and inv_amt is not None and qty > 0:
         avg = inv_amt / qty
 
-    rep_inr = _broker_reported_inr(row) or 0.0
     day_chg = _to_float(_pick(row, "day_change", "day_change_value", "dayChange", "pnl_today"))
     unreal = _to_float(_pick(row, "unrealized_pnl", "pnl", "gain", "overall_pnl"))
-    if unreal is None and avg is not None and ltp is not None:
+    if explicit_pre == "US_STOCK" and inr_unreal_broker is not None and rate > 0:
+        unreal = inr_unreal_broker / rate
+    elif unreal is None and avg is not None and ltp is not None:
         unreal = (ltp - avg) * qty
 
     explicit_at = _pick(row, "asset_type", "assetType", "instrument_type", "category")
@@ -433,6 +452,7 @@ def normalize_raw_holding(row: dict[str, Any], *, now: datetime | None = None) -
         updated_at=ts,
         asset_class_l2=asset_class_l2,
         inr_market_value=rep_inr,
+        inr_unrealized_pnl=inr_unreal_broker,
     )
 
 
