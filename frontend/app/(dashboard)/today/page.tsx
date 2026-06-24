@@ -4,18 +4,18 @@ import Link from "next/link";
 import { useMemo } from "react";
 
 import { ExposureSpine } from "@/components/ExposureSpine";
+import { HeroMoney } from "@/components/HeroMoney";
 import { MoneyValue } from "@/components/MoneyValue";
 import { ShieldHealthCard } from "@/components/ShieldHealthCard";
+import { StaleSyncBadge } from "@/components/StaleSyncBadge";
 import { TodaySleevePerformance } from "@/components/TodaySleevePerformance";
 import { usePortfolio } from "@/components/PortfolioContext";
 import { summarizeAlerts } from "@/lib/alertSummary";
 import { deriveIntradayStatus, intradayUnavailableCopy } from "@/lib/intraday";
-import { formatInr, formatInrHero, formatPct, formatPct1, formatSyncShort } from "@/lib/format";
+import { formatPct, formatPct1, formatSyncShort } from "@/lib/format";
 
 export default function TodayPage() {
   const { data, err, loading, refreshing } = usePortfolio();
-
-  const hero = useMemo(() => (data ? formatInrHero(data.totals.market_value) : null), [data]);
 
   const primaryInsight = useMemo(() => {
     if (!data) return null;
@@ -77,22 +77,13 @@ export default function TodayPage() {
             aria-hidden
           />
           <div className="relative">
-            <p className="text-[11px] uppercase tracking-[0.28em] text-muted-dim">Total wealth · INR</p>
-            {hero ? (
-              <p
-                className={`mt-3 font-display text-[clamp(2.5rem,7vw,5.1rem)] font-medium leading-[0.98] tracking-tight text-ink ${
-                  refreshing ? "motion-safe:animate-pulse motion-reduce:animate-none" : ""
-                }`}
-              >
-                <span className="blur-balance inline-block">
-                  <span className="align-[0.18em] text-[0.5em] font-semibold text-brass">{hero.symbol}</span>
-                  {hero.main}
-                  {hero.dec ? <span className="text-[0.42em] text-muted-dim">{hero.dec}</span> : null}
-                </span>
-              </p>
-            ) : null}
+            <HeroMoney
+              inr={data.totals.market_value}
+              className={refreshing ? "motion-safe:animate-pulse motion-reduce:animate-none" : ""}
+            />
 
             <div className="mt-4 flex flex-wrap gap-2">
+              <StaleSyncBadge meta={data.meta} stale={data.alerts.stale_data} />
               <span className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel2 px-2.5 py-1.5 font-mono text-[11px] text-muted">
                 <span className="h-1.5 w-1.5 rounded-full bg-brass" aria-hidden />
                 As of {formatSyncShort(data.meta.last_price_sync ?? data.meta.last_holdings_sync)} IST

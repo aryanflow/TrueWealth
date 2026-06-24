@@ -133,7 +133,7 @@ class IndmoneyAdapter:
     async def _fetch_networth_holdings_merged(self) -> list[dict[str, Any]]:
         """INDmoney exposes per-asset-class holdings; each call requires ``asset_type``.
 
-        Calls are **sequential** to stay under INDmoney's ~30 MCP calls/min global rate limit.
+        Fetches in **pairs** (max 2 concurrent) with a short gap to balance speed vs rate limits.
         Asset types that hit ``rate_limit_exceeded`` are retried once after a short cooldown.
         """
 
@@ -185,8 +185,14 @@ class IndmoneyAdapter:
             return []
 
         merged: list[dict[str, Any]] = []
-        for asset_type in NETWORTH_HOLDINGS_ASSET_TYPES:
-            merged.extend(await one(asset_type))
+        types = list(NETWORTH_HOLDINGS_ASSET_TYPES)
+        for i in range(0, len(types), 2):
+            batch = types[i : i + 2]
+            parts = await asyncio.gather(*(one(t) for t in batch))
+            for rows in parts:
+                merged.extend(rows)
+            if i + 2 < len(types):
+                await asyncio.sleep(0.35)
 
         if rate_limited_types:
             cooldown = 8

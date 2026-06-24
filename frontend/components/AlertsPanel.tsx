@@ -38,10 +38,12 @@ export function AlertsPanel({ alerts }: { alerts: PortfolioAlerts }) {
         {alerts.missing_cost_basis.length > 0 && (
           <li className="rounded-xl border border-line bg-canvas/50 px-4 py-3 text-muted">
             <p className="font-medium text-ink">Missing cost basis</p>
-            <p className="mt-1 text-xs">Unrealized P&amp;L incomplete for: {alerts.missing_cost_basis.join(", ")}.</p>
+            <p className="mt-1 text-xs">
+              Unrealized P&amp;L incomplete for:{" "}
+              {alerts.missing_cost_basis.map((x) => x.name).join(", ")}.
+            </p>
             <p className="mt-2 text-xs">
-              <strong className="text-ink">Action:</strong> enrich from broker export or wait for MCP fields if
-              supported.
+              <strong className="text-ink">Action:</strong> add cost basis in the holding inspector or on Decide.
             </p>
           </li>
         )}

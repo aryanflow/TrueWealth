@@ -5,13 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo } from "react";
 
 import { ActionPlanPanel } from "@/components/ActionPlanPanel";
+import { CostBasisForm } from "@/components/CostBasisForm";
 import { usePortfolio } from "@/components/PortfolioContext";
 import { summarizeAlerts } from "@/lib/alertSummary";
 import { holdingDisambiguator } from "@/lib/assetLabels";
 import { formatInr, formatPct1 } from "@/lib/format";
 
 function DecidePageInner() {
-  const { data, err, loading, setInspectorHolding, thr } = usePortfolio();
+  const { data, err, loading, setInspectorHolding, thr, inspectorHolding } = usePortfolio();
   const router = useRouter();
   const search = useSearchParams();
 
@@ -31,30 +32,7 @@ function DecidePageInner() {
   const usdPct = data?.usd_exposure_pct ?? data?.allocation.by_currency.find((s) => s.key === "USD")?.pct ?? 0;
   const offshorePct = data?.global_equity_offshore_pct ?? 0;
 
-  const costHoldings = useMemo(() => {
-    if (!data) return [];
-    const n = summarizeAlerts(data.alerts, data.meta, data.holdings).missingCostHoldings;
-    if (n <= 0) return [];
-    const seen = new Set<string>();
-    const out: { key: string; label: string; id?: string }[] = [];
-    for (const name of data.alerts.missing_cost_basis) {
-      const matches = data.holdings.filter((h) => h.name === name);
-      if (matches.length === 0) {
-        if (!seen.has(name)) {
-          seen.add(name);
-          out.push({ key: name, label: name });
-        }
-        continue;
-      }
-      for (const h of matches) {
-        const label = holdingDisambiguator(h);
-        if (seen.has(label)) continue;
-        seen.add(label);
-        out.push({ key: `${h.id}-${label}`, label, id: h.id });
-      }
-    }
-    return out;
-  }, [data]);
+  const costHoldings = useMemo(() => data?.alerts.missing_cost_basis ?? [], [data]);
 
   if (loading) {
     return (
@@ -137,28 +115,34 @@ function DecidePageInner() {
               <strong className="text-ink">Settings → Refresh now</strong> so the data agent can refill averages.
             </p>
             <ul className="mt-5 grid gap-3 sm:grid-cols-2">
-              {costHoldings.slice(0, 12).map((row) => (
-                <li key={row.key}>
-                  {row.id ? (
-                    <Link
-                      href={`/decide?holding=${encodeURIComponent(row.id)}#cost`}
-                      className="flex min-h-12 items-center gap-3 rounded-[11px] border border-line bg-ink-bg px-4 py-3 text-[13px] text-ink transition hover:border-coral/50 hover:bg-coral/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60"
+              {costHoldings.slice(0, 12).map((row) => {
+                const h = data.holdings.find((x) => x.id === row.holding_id);
+                const label = h ? holdingDisambiguator(h) : row.name;
+                return (
+                  <li key={row.holding_id}>
+                    <button
+                      type="button"
+                      onClick={() => h && setInspectorHolding(h)}
+                      className="flex min-h-12 w-full items-center gap-3 rounded-[11px] border border-line bg-ink-bg px-4 py-3 text-left text-[13px] text-ink transition hover:border-coral/50 hover:bg-coral/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60"
                     >
                       <span className="h-2 w-2 shrink-0 rounded-full bg-coral shadow-[0_0_8px] shadow-coral" aria-hidden />
-                      <span className="min-w-0 flex-1 leading-snug">{row.label}</span>
+                      <span className="min-w-0 flex-1 leading-snug">{label}</span>
                       <span className="text-muted-dim" aria-hidden>
                         →
                       </span>
-                    </Link>
-                  ) : (
-                    <div className="flex min-h-12 items-center gap-3 rounded-[11px] border border-line bg-ink-bg px-4 py-3 text-[13px] text-muted">
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-coral" aria-hidden />
-                      {row.label}
-                    </div>
-                  )}
-                </li>
-              ))}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
+            {inspectorHolding && costHoldings.some((c) => c.holding_id === inspectorHolding.id) ? (
+              <div className="mt-5 rounded-xl border border-line bg-panel2/30 p-4">
+                <p className="font-medium text-ink">{inspectorHolding.name}</p>
+                <div className="mt-3">
+                  <CostBasisForm holding={inspectorHolding} />
+                </div>
+              </div>
+            ) : null}
           </>
         ) : (
           <p className="mt-3 flex items-center gap-3 text-[13.5px] text-muted">

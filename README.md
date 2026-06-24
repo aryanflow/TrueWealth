@@ -1,6 +1,6 @@
 # TRUE WEALTH
 
-Single-user **read-only** portfolio dashboard for an Indian investor. **INDmoney MCP** is the primary holdings source when configured; otherwise the UI runs on **mock JSON** so you can develop and demo without a broker connection.
+Single-user **read-only** portfolio dashboard for an Indian investor. **INDmoney MCP** is the primary holdings source when configured; otherwise the live book is **empty** (no hidden sample data on the refresh path). Use `backend/sample_data/` only for offline dev fixtures.
 
 **Not investment advice.** No trades, no stored broker passwords.
 

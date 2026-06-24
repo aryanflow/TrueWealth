@@ -174,3 +174,21 @@ class IndmoneyOAuthPending(Base):
     scope: Mapped[str] = mapped_column(String(512))
     return_base: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class HoldingCostOverride(Base):
+    __tablename__ = "holding_cost_overrides"
+
+    holding_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    avg_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(64), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

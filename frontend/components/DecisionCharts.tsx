@@ -15,10 +15,13 @@ import {
   YAxis,
 } from "recharts";
 
+import { useDisplayPreferences } from "@/components/DisplayPreferences";
+import { formatMoneyDisplay } from "@/components/MoneyValue";
+import { usePortfolio } from "@/components/PortfolioContext";
 import { holdingDisambiguator } from "@/lib/assetLabels";
 import { colorForSliceKey, CHART_LADDER } from "@/lib/chartColors";
 import { drawdownChartReady, drawdownSeries, wealthChartReady } from "@/lib/chartGuards";
-import { formatChartDate, formatInr, formatPct1 } from "@/lib/format";
+import { formatChartDate, formatPct1 } from "@/lib/format";
 import { filterHistoryByRange, type HistoryRange } from "@/lib/historyRange";
 import type { HistoryPoint, NormalizedHolding, PortfolioAlerts, PortfolioMeta } from "@/lib/types";
 
@@ -53,6 +56,14 @@ export function DecisionCharts({
   alerts?: PortfolioAlerts | null;
 }) {
   const [range, setRange] = useState<HistoryRange>("ALL");
+  const { hideBalances, displayCurrency } = useDisplayPreferences();
+  const { data: portfolio } = usePortfolio();
+  const moneyOpts = {
+    hideBalances,
+    displayCurrency,
+    fxUsdInr: portfolio?.meta.fx_usd_inr ?? meta.fx_usd_inr,
+  };
+
   const scopedHistory = useMemo(() => filterHistoryByRange(history, range), [history, range]);
 
   const wealth = scopedHistory.map((h) => ({
@@ -120,7 +131,7 @@ export function DecisionCharts({
         </div>
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-      <div className="panel-card">
+      <div className="panel-card min-h-[280px] sm:min-h-[320px]">
         <h3 className="font-display text-lg font-semibold text-ink">Wealth (INR)</h3>
         <p className="mt-1 font-mono text-xs text-muted-dim">active view · daily value</p>
         <div className={`mt-4 ${!wealthReady.ok && wealth.length === 0 ? "min-h-0" : "h-56"}`}>
@@ -156,7 +167,7 @@ export function DecisionCharts({
                     tickLine={false}
                   />
                   <Tooltip
-                    formatter={(v: number) => [formatInr(v), "INR"]}
+                    formatter={(v: number) => [formatMoneyDisplay(v, moneyOpts), displayCurrency]}
                     labelFormatter={(_, payload) => {
                       const row = payload?.[0]?.payload as (typeof wealth)[0] | undefined;
                       return row ? formatChartDate(row.rawDate) : "";
@@ -302,17 +313,17 @@ export function DecisionCharts({
                           Weight <span className="text-ink">{formatPct1(d.w)}</span>
                         </p>
                         <p className="font-mono text-muted">
-                          Value <span className="text-mint">{formatInr(d.inr)}</span>
+                          Value <span className="text-mint">{formatMoneyDisplay(d.inr, moneyOpts)}</span>
                         </p>
                         <p className="font-mono text-muted">
                           Target <span className="text-ink">{formatPct1(tgt)}</span>
                         </p>
                         <p className="font-mono text-muted">
-                          Trim (indicative) <span className="text-ember">{formatInr(trim)}</span>
+                          Trim (indicative) <span className="text-ember">{formatMoneyDisplay(trim, moneyOpts)}</span>
                         </p>
                         {dilute != null && dilute > 0 ? (
                           <p className="font-mono text-muted">
-                            Dilute (indicative) <span className="text-peri">{formatInr(dilute)}</span>
+                            Dilute (indicative) <span className="text-peri">{formatMoneyDisplay(dilute, moneyOpts)}</span>
                           </p>
                         ) : null}
                         {d.over ? (

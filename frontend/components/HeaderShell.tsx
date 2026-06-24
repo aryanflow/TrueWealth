@@ -130,7 +130,7 @@ export function HeaderShell() {
               onClick={() => setDisplayCurrency(displayCurrency === "INR" ? "USD" : "INR")}
               className="hidden min-h-10 rounded-[11px] border border-line bg-panel px-2.5 font-mono text-[10px] text-muted transition hover:border-line2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-peri/60 sm:grid sm:place-items-center"
               aria-label={`Display currency ${displayCurrency}`}
-              title="Toggle INR / USD display for USD-native lines"
+              title={`Display whole book in ${displayCurrency === "INR" ? "USD" : "INR"} (uses portfolio FX rate)`}
             >
               {displayCurrency}
             </button>

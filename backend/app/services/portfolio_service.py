@@ -17,6 +17,7 @@ from app.schemas import (
     ConcentrationAlert,
     Currency,
     DataCompleteness,
+    MissingCostBasisItem,
     NormalizedHolding,
     PortfolioAlerts,
     PortfolioAllocation,
@@ -31,6 +32,8 @@ from app.services.allocations import build_allocations
 from app.services.fx_book import book_value_inr, dedupe_holdings_by_instrument, sum_inr_market
 from app.services.performance_metrics import compute_performance_from_history
 from app.services.portfolio_views import build_coverage, filter_holdings_for_view
+from app.services.shield_metrics import compute_shield_snapshot
+from app.services.cost_overrides import apply_cost_overrides, load_cost_overrides
 
 log = logging.getLogger(__name__)
 
@@ -225,6 +228,8 @@ def compute_portfolio(
     history: list[dict[str, Any]] | None = None,
     mf_lab: list[Any] | None = None,
     usd_inr: float = 94.61,
+    fx_mode: str = "static",
+    fx_as_of: datetime | None = None,
 ) -> PortfolioResponse:
     holdings = dedupe_holdings_by_instrument(list(holdings))
     total_inr = sum_inr_market(holdings)
@@ -280,8 +285,12 @@ def compute_portfolio(
     elif meta.mode == "live":
         stale = True
 
-    missing = [h.name for h in weights if h.avg_cost is None and h.asset_type.value != "CASH"]
-    missing_n = len(missing)
+    missing_items = [
+        MissingCostBasisItem(holding_id=h.id, name=h.name)
+        for h in weights
+        if h.avg_cost is None and h.asset_type.value != "CASH"
+    ]
+    missing_n = len(missing_items)
     excluded_n = sum(1 for h in holdings if not h.book_include)
     excluded_names = [h.name[:48] or (h.symbol or "") or h.id for h in holdings if not h.book_include][:6]
     excluded_hint = ""
@@ -294,7 +303,7 @@ def compute_portfolio(
     score = max(0.0, 100.0 - 4.0 * missing_n - (10.0 if any(h.currency == Currency.USD for h in weights) else 0.0))
     dc = DataCompleteness(
         score=round(score, 2),
-        fx_mode="static",
+        fx_mode=fx_mode,
         missing_cost_basis_count=missing_n,
         transactions_available=txs_count > 0,
         ohlc_coverage_pct=0.0,
@@ -327,7 +336,7 @@ def compute_portfolio(
         update={
             "base_currency": "INR",
             "fx_usd_inr": float(usd_inr),
-            "fx_as_of": _dt_now(),
+            "fx_as_of": fx_as_of or _dt_now(),
             "data_completeness": dc,
             "confidence": confidence,
             "confidence_notes": confidence_notes,
@@ -352,7 +361,7 @@ def compute_portfolio(
         concentration=conc,
         stale_data=stale,
         last_sync=last_sync,
-        missing_cost_basis=missing,
+        missing_cost_basis=missing_items,
     )
 
     totals = PortfolioTotals(
@@ -364,7 +373,7 @@ def compute_portfolio(
     )
 
     top10 = weights[:10]
-    return PortfolioResponse(
+    base = PortfolioResponse(
         totals=totals,
         allocation=allocation,
         top_holdings=top10,
@@ -379,6 +388,7 @@ def compute_portfolio(
         global_equity_offshore_pct=float(offshore_w),
         allocation_full_book=None,
     )
+    return base.model_copy(update={"shield": compute_shield_snapshot(base)})
 
 
 async def persist_holdings(session: AsyncSession, holdings: list[NormalizedHolding]) -> None:
@@ -442,6 +452,7 @@ async def persist_transactions_stub(session: AsyncSession, txs: list[dict[str, A
 async def read_holdings_from_db(session: AsyncSession) -> list[NormalizedHolding]:
     res = await session.execute(select(HoldingCurrent))
     rows = res.scalars().all()
+    overrides = await load_cost_overrides(session)
     out: list[NormalizedHolding] = []
     for r in rows:
         out.append(
@@ -469,10 +480,11 @@ async def read_holdings_from_db(session: AsyncSession) -> list[NormalizedHolding
                     "inr_day_change_value": getattr(r, "inr_day_change_value", None),
                     "fx_usd_inr_used": getattr(r, "fx_usd_inr_used", None),
                     "fx_as_of": getattr(r, "fx_as_of", None),
+                    "cost_basis_source": "manual" if r.id in overrides else "mcp",
                 }
             )
         )
-    return dedupe_holdings_by_instrument(out)
+    return apply_cost_overrides(dedupe_holdings_by_instrument(out), overrides)
 
 
 async def append_portfolio_snapshot_inr(
@@ -563,6 +575,8 @@ async def assemble_portfolio_response(
     txs_count: int,
     mf_lab_full: list[Any],
     usd_inr: float,
+    fx_mode: str = "static",
+    fx_as_of: datetime | None = None,
 ) -> PortfolioResponse:
     """Full book plus active view filter, merged meta for API and SSE."""
     from app.services.portfolio_views import load_active_view_row, parse_include_json
@@ -580,6 +594,8 @@ async def assemble_portfolio_response(
         history=hist,
         mf_lab=mf_lab_full,
         usd_inr=usd_inr,
+        fx_mode=fx_mode,
+        fx_as_of=fx_as_of,
     )
     filtered = filter_holdings_for_view(all_holdings, include_map)
     filt_ids = {h.id for h in filtered}
@@ -609,6 +625,8 @@ async def assemble_portfolio_response(
         history=hist,
         mf_lab=mf_filtered,
         usd_inr=usd_inr,
+        fx_mode=fx_mode,
+        fx_as_of=fx_as_of,
     )
 
     excluded = round(max(0.0, full.totals.market_value - active.totals.market_value), 4)

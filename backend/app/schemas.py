@@ -74,6 +74,10 @@ class NormalizedHolding(BaseModel):
         default=True,
         description="If false, this line is excluded from INR book totals (e.g. absurd native price).",
     )
+    cost_basis_source: Optional[str] = Field(
+        default=None,
+        description="'mcp' from broker feed, 'manual' when overridden locally.",
+    )
 
     @field_validator("updated_at", "fx_as_of", mode="before")
     @classmethod
@@ -119,7 +123,24 @@ class PortfolioAlerts(BaseModel):
     concentration: List[ConcentrationAlert] = Field(default_factory=list)
     stale_data: bool = False
     last_sync: Optional[datetime] = None
-    missing_cost_basis: List[str] = Field(default_factory=list)
+    missing_cost_basis: List["MissingCostBasisItem"] = Field(default_factory=list)
+
+
+class MissingCostBasisItem(BaseModel):
+    holding_id: str
+    name: str
+
+
+class ShieldSnapshot(BaseModel):
+    data_pct: int
+    risk_pct: int
+    align_pct: int
+    score: int
+    missing_cost: int
+    invalid_price: int
+    breach_text: str
+    align_subline: str
+    formula: str
 
 
 class DataCompleteness(BaseModel):
@@ -281,6 +302,12 @@ class PortfolioResponse(BaseModel):
         default=None,
         description="When the active view excludes sleeves, full-book allocation for Map/Today comparison.",
     )
+    shield: Optional[ShieldSnapshot] = None
+
+
+class HoldingCostUpdate(BaseModel):
+    avg_cost: float = Field(gt=0, description="Average cost per unit in the holding's native currency.")
+    note: Optional[str] = Field(default=None, max_length=500)
 
 
 class RulesUpdate(BaseModel):

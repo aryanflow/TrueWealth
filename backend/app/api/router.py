@@ -1,10 +1,11 @@
 from fastapi import APIRouter
 
-from app.api import health, indmoney_auth, mcp, mf, portfolio, rules, stream, views
+from app.api import health, holdings, indmoney_auth, mcp, mf, portfolio, rules, stream, views
 
 router = APIRouter()
 router.include_router(health.router, tags=["health"])
 router.include_router(portfolio.router, tags=["portfolio"])
+router.include_router(holdings.router, tags=["holdings"])
 router.include_router(stream.router, tags=["stream"])
 router.include_router(rules.router, tags=["rules"])
 router.include_router(mcp.router, tags=["mcp"])

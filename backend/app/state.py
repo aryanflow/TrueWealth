@@ -14,7 +14,9 @@ from app.mcp.client import IndmoneyMcpClient
 from app.models import Transaction
 from app.schemas import McpToolSummary, PortfolioMeta, PortfolioResponse
 from app.services.broadcast import BroadcastHub
+from app.services.cost_overrides import apply_cost_overrides, load_cost_overrides
 from app.services.day_move_proxy import enrich_day_change_from_ohlc
+from app.services.fx_rates import resolve_usd_inr
 from app.services.holding_quality import finalize_holdings_pipeline, prepare_holdings_from_priced_rows
 from app.services.mf_lab import build_mf_lab_summaries
 from app.services.normalizer import extract_transactions, normalize_payload
@@ -101,6 +103,16 @@ class AppState:
 
     def refresh_lock_busy(self) -> bool:
         return self._lock.locked()
+
+    async def _resolve_fx(self, session: AsyncSession) -> tuple[float, str, datetime]:
+        rate, mode, as_of = await resolve_usd_inr(session)
+        return rate, mode, as_of
+
+    async def recompute_from_db(self, session: AsyncSession) -> PortfolioResponse:
+        """Rebuild cache after local edits (cost overrides) without MCP."""
+        pr = await self.rebuild_portfolio_cache(session)
+        await self.hub.publish("portfolio", pr.model_dump(mode="json"))
+        return pr
 
     async def apply_mcp_endpoint_from_db(self, session: AsyncSession) -> None:
         """DB URL overrides env. Empty string in DB = user chose mock only. NULL = use env (defaults to official INDmoney URL)."""
@@ -198,6 +210,7 @@ class AppState:
             self.last_price_sync = None
             rule = await load_rules(session)
             meta = self.meta()
+            usd_inr, fx_mode, fx_as_of = await self._resolve_fx(session)
             self.cached = await assemble_portfolio_response(
                 session,
                 all_holdings=[],
@@ -205,7 +218,9 @@ class AppState:
                 rule=rule,
                 txs_count=0,
                 mf_lab_full=[],
-                usd_inr=settings.usdinr_rate,
+                usd_inr=usd_inr,
+                fx_mode=fx_mode,
+                fx_as_of=fx_as_of,
             )
             log.info("clear_portfolio_book: holdings and cache cleared")
             return self.cached
@@ -261,14 +276,15 @@ class AppState:
                 self.mode = "empty" if not self.client.configured() else "degraded"
 
             now = datetime.now(timezone.utc)
+            usd_inr, fx_mode, fx_as_of = await self._resolve_fx(session)
             normalized = normalize_payload(raw, now=now)
             log.info("refresh_holdings: normalized holdings count=%s mode=%s", len(normalized), self.mode)
             rows = [h.model_dump(mode="json") for h in normalized]
             priced = apply_prices_to_holdings(rows)
             holdings = prepare_holdings_from_priced_rows(
                 priced,
-                usd_inr=settings.usdinr_rate,
-                fx_as_of=now,
+                usd_inr=usd_inr,
+                fx_as_of=fx_as_of,
             )
 
             existing_db = await read_holdings_from_db(session)
@@ -318,6 +334,9 @@ class AppState:
                     mf_lab = await build_mf_lab_summaries(session, self.adapter, holdings)
                 except Exception as e:  # noqa: BLE001
                     log.warning("mf_lab refresh failed: %s", e)
+            overrides = await load_cost_overrides(session)
+            holdings = apply_cost_overrides(holdings, overrides)
+            holdings = finalize_holdings_pipeline(holdings, usd_inr=usd_inr, fx_as_of=fx_as_of)
             self.cached = await assemble_portfolio_response(
                 session,
                 all_holdings=holdings,
@@ -325,7 +344,9 @@ class AppState:
                 rule=rule,
                 txs_count=tx_count,
                 mf_lab_full=mf_lab,
-                usd_inr=settings.usdinr_rate,
+                usd_inr=usd_inr,
+                fx_mode=fx_mode,
+                fx_as_of=fx_as_of,
             )
             try:
                 ft = self.cached.meta.full_book_totals
@@ -353,10 +374,11 @@ class AppState:
                 plain.append(d)
             priced = apply_prices_to_holdings(plain)
             now = datetime.now(timezone.utc)
+            usd_inr, fx_mode, fx_as_of = await self._resolve_fx(session)
             holdings = prepare_holdings_from_priced_rows(
                 priced,
-                usd_inr=settings.usdinr_rate,
-                fx_as_of=now,
+                usd_inr=usd_inr,
+                fx_as_of=fx_as_of,
             )
             if self.mcp_connected and settings.ohlc_enrich_max > 0:
                 try:
@@ -367,8 +389,8 @@ class AppState:
                     )
                     holdings = finalize_holdings_pipeline(
                         holdings,
-                        usd_inr=settings.usdinr_rate,
-                        fx_as_of=now,
+                        usd_inr=usd_inr,
+                        fx_as_of=fx_as_of,
                     )
                 except Exception as e:  # noqa: BLE001
                     log.debug("ohlc enrich skipped: %s", e)
@@ -381,6 +403,9 @@ class AppState:
             meta = self.meta()
             tx_count = int((await session.execute(select(func.count()).select_from(Transaction))).scalar_one() or 0)
             prev_mf = list(self.cached.mf_lab) if self.cached else []
+            overrides = await load_cost_overrides(session)
+            holdings = apply_cost_overrides(holdings, overrides)
+            holdings = finalize_holdings_pipeline(holdings, usd_inr=usd_inr, fx_as_of=fx_as_of)
             self.cached = await assemble_portfolio_response(
                 session,
                 all_holdings=holdings,
@@ -388,7 +413,9 @@ class AppState:
                 rule=rule,
                 txs_count=tx_count,
                 mf_lab_full=prev_mf,
-                usd_inr=settings.usdinr_rate,
+                usd_inr=usd_inr,
+                fx_mode=fx_mode,
+                fx_as_of=fx_as_of,
             )
             return self.cached
 
@@ -398,11 +425,12 @@ class AppState:
         Intentionally does **not** take ``_lock`` so UI reads are not blocked by in-flight MCP sync.
         """
         now = datetime.now(timezone.utc)
+        usd_inr, fx_mode, fx_as_of = await self._resolve_fx(session)
         holdings = await read_holdings_from_db(session)
         holdings = finalize_holdings_pipeline(
             holdings,
-            usd_inr=settings.usdinr_rate,
-            fx_as_of=now,
+            usd_inr=usd_inr,
+            fx_as_of=fx_as_of,
         )
         rule = await load_rules(session)
         meta = self.meta()
@@ -415,7 +443,9 @@ class AppState:
             rule=rule,
             txs_count=tx_count,
             mf_lab_full=prev_mf,
-            usd_inr=settings.usdinr_rate,
+            usd_inr=usd_inr,
+            fx_mode=fx_mode,
+            fx_as_of=fx_as_of,
         )
         return self.cached
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { CostBasisForm } from "@/components/CostBasisForm";
 import { MoneyValue } from "@/components/MoneyValue";
 import { usePortfolio } from "@/components/PortfolioContext";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -83,15 +84,12 @@ export function HoldingInspectorSheet() {
               ) : null}
             </p>
           ) : null}
-          {h.avg_cost == null ? (
-            <Link
-              href={`/decide?holding=${encodeURIComponent(h.id)}#cost`}
-              onClick={() => setInspectorHolding(null)}
-              className="link-action inline-flex text-sm"
-            >
-              Add cost basis for P&amp;L →
-            </Link>
-          ) : null}
+          <div className="rounded-lg border border-line bg-panel2/40 p-4">
+            <p className="text-[10px] uppercase tracking-wide text-muted">Cost basis</p>
+            <div className="mt-2">
+              <CostBasisForm holding={h} compact />
+            </div>
+          </div>
           {h.inr_unrealized_pnl != null ? (
             <p className={`text-sm font-mono ${h.inr_unrealized_pnl >= 0 ? "text-gain-muted" : "text-loss-muted"}`}>
               Unrealized P&amp;L (INR){" "}
@@ -102,9 +100,6 @@ export function HoldingInspectorSheet() {
           ) : (
             <p className="text-xs text-muted">Unrealized P&amp;L not available for this line.</p>
           )}
-          <div className="rounded-lg border border-dashed border-hairline bg-surface-elevated/30 p-4 text-center text-xs text-muted">
-            Price history coming
-          </div>
           <div className="space-y-2">
             <label className="text-xs text-muted" htmlFor="tw-note">
               Note (saved on this device)
@@ -119,14 +114,6 @@ export function HoldingInspectorSheet() {
             />
           </div>
           <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              disabled
-              className="rounded-lg border border-hairline px-3 py-2 text-left text-xs text-muted"
-              title="Coming soon"
-            >
-              Pin to watch (soon)
-            </button>
             <Link
               href={`/decide?holding=${encodeURIComponent(h.id)}&trimPct=${encodeURIComponent(String(trimPct))}`}
               onClick={() => setInspectorHolding(null)}

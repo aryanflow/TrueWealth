@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { useCommandPaletteOptional } from "@/components/CommandPalette";
-import type { PortfolioResponse } from "@/lib/types";
+import type { PortfolioResponse, ShieldSnapshot } from "@/lib/types";
 import { computeShieldMetrics, shieldScoreFormula } from "@/lib/shieldMetrics";
 
 const RING_META = [
@@ -24,13 +24,27 @@ export function ShieldHealthCard({ data }: { data: PortfolioResponse }) {
     return () => cancelAnimationFrame(t);
   }, []);
 
-  const m = useMemo(() => computeShieldMetrics(data), [data]);
-  const formula = useMemo(() => shieldScoreFormula(m), [m]);
+  const m = useMemo((): ShieldSnapshot => {
+    if (data.shield) return data.shield;
+    const local = computeShieldMetrics(data);
+    return {
+      data_pct: local.dataPct,
+      risk_pct: local.riskPct,
+      align_pct: local.alignPct,
+      score: local.score,
+      missing_cost: local.missingCost,
+      invalid_price: local.invalidPrice,
+      breach_text: local.breachText,
+      align_subline: local.alignSubline,
+      formula: shieldScoreFormula(local),
+    };
+  }, [data]);
+  const formula = m.formula;
 
   const ringValues = {
-    data: m.dataPct,
-    risk: m.riskPct,
-    align: m.alignPct,
+    data: m.data_pct,
+    risk: m.risk_pct,
+    align: m.align_pct,
   };
 
   return (
@@ -104,43 +118,43 @@ export function ShieldHealthCard({ data }: { data: PortfolioResponse }) {
         <div>
           <div className="flex justify-between text-[12.5px]">
             <span className="font-medium text-ink">Data integrity</span>
-            <span className="font-mono font-semibold text-peri">{m.dataPct}%</span>
+            <span className="font-mono font-semibold text-peri">{m.data_pct}%</span>
           </div>
           <div className="mt-1.5 h-1.5 overflow-hidden rounded bg-line">
             <div
               className="h-full rounded bg-peri motion-reduce:transition-none"
-              style={{ width: animated ? `${m.dataPct}%` : "0%", transition: "width 1.1s cubic-bezier(0.6,0,0.2,1)" }}
+              style={{ width: animated ? `${m.data_pct}%` : "0%", transition: "width 1.1s cubic-bezier(0.6,0,0.2,1)" }}
             />
           </div>
           <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-dim">
-            Missing cost lines: {m.missingCost} · Invalid / excluded prices: {m.invalidPrice}
+            Missing cost lines: {m.missing_cost} · Invalid / excluded prices: {m.invalid_price}
           </p>
         </div>
         <div>
           <div className="flex justify-between text-[12.5px]">
             <span className="font-medium text-ink">Risk discipline</span>
-            <span className="font-mono font-semibold text-mint">{m.riskPct}%</span>
+            <span className="font-mono font-semibold text-mint">{m.risk_pct}%</span>
           </div>
           <div className="mt-1.5 h-1.5 overflow-hidden rounded bg-line">
             <div
               className="h-full rounded bg-mint motion-reduce:transition-none"
-              style={{ width: animated ? `${m.riskPct}%` : "0%", transition: "width 1.1s cubic-bezier(0.6,0,0.2,1) 0.1s" }}
+              style={{ width: animated ? `${m.risk_pct}%` : "0%", transition: "width 1.1s cubic-bezier(0.6,0,0.2,1) 0.1s" }}
             />
           </div>
-          <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-dim">{m.breachText}</p>
+          <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-dim">{m.breach_text}</p>
         </div>
         <div>
           <div className="flex justify-between text-[12.5px]">
             <span className="font-medium text-ink">Plan alignment</span>
-            <span className="font-mono font-semibold text-brass-soft">{m.alignPct}%</span>
+            <span className="font-mono font-semibold text-brass-soft">{m.align_pct}%</span>
           </div>
           <div className="mt-1.5 h-1.5 overflow-hidden rounded bg-line">
             <div
               className="h-full rounded bg-brass motion-reduce:transition-none"
-              style={{ width: animated ? `${m.alignPct}%` : "0%", transition: "width 1.1s cubic-bezier(0.6,0,0.2,1) 0.2s" }}
+              style={{ width: animated ? `${m.align_pct}%` : "0%", transition: "width 1.1s cubic-bezier(0.6,0,0.2,1) 0.2s" }}
             />
           </div>
-          <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-dim">{m.alignSubline}</p>
+          <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-dim">{m.align_subline}</p>
         </div>
       </div>
 

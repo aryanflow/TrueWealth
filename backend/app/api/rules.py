@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_session
 from app.services import indmoney_oauth_service as imo
 from app.schemas import RulesResponse, RulesUpdate
+from app.services.audit import append_audit
 from app.services.portfolio_service import load_rules, update_rules
 from app.state import state
 
@@ -12,12 +13,20 @@ router = APIRouter()
 
 @router.post("/rules", response_model=RulesResponse)
 async def post_rules(body: RulesUpdate, session: AsyncSession = Depends(get_session)) -> RulesResponse:
+    before = await load_rules(session)
     r = await update_rules(
         session,
         concentration_threshold_pct=body.concentration_threshold_pct,
         price_refresh_sec=body.price_refresh_sec,
         holdings_refresh_sec=body.holdings_refresh_sec,
     )
+    if body.concentration_threshold_pct is not None and body.concentration_threshold_pct != before.concentration_threshold_pct:
+        await append_audit(
+            session,
+            "rules_guardrail",
+            f"concentration_threshold_pct {before.concentration_threshold_pct} -> {body.concentration_threshold_pct}",
+        )
+        await session.commit()
     if state.cached is not None:
         await state.refresh_prices(session)
     linked = await imo.oauth_is_linked(session)

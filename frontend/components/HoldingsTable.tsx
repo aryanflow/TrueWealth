@@ -7,6 +7,7 @@ import { MoneyValue } from "@/components/MoneyValue";
 import { holdingDisambiguator, labelSlice } from "@/lib/assetLabels";
 import { downloadCsv, holdingsToCsv } from "@/lib/exportHoldings";
 import { formatInr, formatValue } from "@/lib/format";
+import { useHoldingsUrlSync } from "@/lib/useHoldingsUrlSync";
 import type { NormalizedHolding } from "@/lib/types";
 
 type SortKey = "weight" | "market_value" | "name" | "book_inr" | "cost_native" | "pnl_inr" | "pnl_pct";
@@ -78,6 +79,7 @@ export function HoldingsTable({
   exportFilename = "true-wealth-holdings",
   title = "Holdings",
   initialChip,
+  syncUrl = false,
 }: {
   holdings: NormalizedHolding[];
   highlightHoldingId?: string | null;
@@ -90,6 +92,8 @@ export function HoldingsTable({
   exportFilename?: string;
   title?: string;
   initialChip?: string;
+  /** When true, chip/sort/search sync to URL query params (Map deep-links). */
+  syncUrl?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortKey>("weight");
@@ -113,6 +117,16 @@ export function HoldingsTable({
     if (initialChip) setChip(initialChip);
   }, [initialChip]);
 
+  const urlSync = useHoldingsUrlSync({
+    enabled: syncUrl,
+    chip,
+    sort,
+    q,
+    onChip: setChip,
+    onSort: setSort,
+    onQ: setQ,
+  });
+
   const pickSort = (k: SortKey) => {
     setSort(k);
     try {
@@ -120,6 +134,7 @@ export function HoldingsTable({
     } catch {
       /* ignore */
     }
+    urlSync.push({ sort: k });
   };
 
   const pickChip = (id: string) => {
@@ -129,6 +144,7 @@ export function HoldingsTable({
     } catch {
       /* ignore */
     }
+    urlSync.push({ chip: id });
   };
 
   const filtered = useMemo(() => {
@@ -245,6 +261,7 @@ export function HoldingsTable({
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
+              onBlur={() => urlSync.push({ q })}
               placeholder="Symbol or name…"
               className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-ion/35"
             />
@@ -336,8 +353,12 @@ export function HoldingsTable({
                             formatValue(cst, h.currency)
                           )}
                         </td>
-                        <td className="px-4 py-2 text-right font-mono numeric text-ink">
-                          {pn == null ? "—" : formatInr(pn)}
+                        <td className="px-4 py-2 text-right">
+                          {pn == null ? (
+                            "—"
+                          ) : (
+                            <MoneyValue inr={pn} signed className="text-ink" />
+                          )}
                         </td>
                         <td className="px-4 py-2 text-right font-mono numeric text-muted">
                           {pp == null ? "—" : `${pp >= 0 ? "+" : ""}${pp.toFixed(2)}%`}

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import router as api_router
 from app.config import settings
 from app.database import SessionLocal
+from app.middleware.auth import ApiKeyMiddleware
 from app.state import state
 from app.tasks.background import start_background_tasks
 
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="TRUE WEALTH API", version="1.0.0", lifespan=lifespan)
+app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

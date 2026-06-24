@@ -210,6 +210,7 @@ function MapPageInner() {
             columnPresetControl={{ value: columnPreset, onChange: setColumnPreset }}
             exportFilename={sleeve ? `true-wealth-${sleeve}` : "true-wealth-holdings"}
             title={sleeve ? `${SLEEVE_LABELS[sleeve]} holdings` : "Holdings"}
+            syncUrl
           />
         )}
       </div>

@@ -35,6 +35,7 @@ export type PortfolioContextValue = {
   inspectorHolding: NormalizedHolding | null;
   setInspectorHolding: (h: NormalizedHolding | null) => void;
   openHoldingById: (id: string) => void;
+  saveHoldingCost: (holdingId: string, avgCost: number, note?: string) => Promise<void>;
   reload: (opts?: { refresh?: boolean }) => Promise<void>;
   postRefresh: () => Promise<void>;
   saveRules: (e: FormEvent) => Promise<void>;
@@ -311,6 +312,19 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
     [data],
   );
 
+  const saveHoldingCost = useCallback(async (holdingId: string, avgCost: number, note?: string) => {
+    const r = await fetch(`/api/holdings/${encodeURIComponent(holdingId)}/cost`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avg_cost: avgCost, note: note ?? null }),
+    });
+    if (!r.ok) throw new Error(`Save failed (${r.status})`);
+    const j = (await r.json()) as { portfolio?: PortfolioResponse; holding?: NormalizedHolding };
+    if (j.portfolio) setData(j.portfolio);
+    else await fetchPortfolio().then(setData);
+    if (j.holding) setInspectorHolding(j.holding);
+  }, []);
+
   const value = useMemo<PortfolioContextValue>(
     () => ({
       data,
@@ -329,6 +343,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       inspectorHolding,
       setInspectorHolding,
       openHoldingById,
+      saveHoldingCost,
       reload,
       postRefresh,
       saveRules,
@@ -352,6 +367,7 @@ export function PortfolioProvider({ children }: { children: ReactNode }) {
       postRefresh,
       saveRules,
       openHoldingById,
+      saveHoldingCost,
       bumpSseGeneration,
       stopStreamReloadReconnect,
       stopLiveStreamOnly,

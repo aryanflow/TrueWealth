@@ -85,6 +85,16 @@ class Settings(BaseSettings):
         alias="TW_HOLDINGS_RAW_PREVIEW",
         description="Log first MCP row key names (no values) after holdings fetch — for mapping issues.",
     )
+    truewealth_api_key: Optional[str] = Field(
+        default=None,
+        alias="TRUEWEALTH_API_KEY",
+        description="If set, require X-API-Key or Bearer on /api/* (except health and OAuth callback).",
+    )
+    fx_live_url: str = Field(
+        default="https://api.frankfurter.dev/v1/latest?from=USD&to=INR",
+        alias="FX_LIVE_URL",
+        description="HTTP JSON endpoint for live USD/INR; empty disables live fetch.",
+    )
 
     @property
     def cors_origins_list(self) -> List[str]:
